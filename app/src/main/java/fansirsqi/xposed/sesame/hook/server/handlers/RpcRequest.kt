@@ -20,3 +20,21 @@ data class RpcRequest(
         }
     }
 }
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class RpcEntityRequest(
+    val operationType: String = "",
+    val appName: String? = null,
+    val facadeName: String? = null,
+    val rpcMethodName: String? = null,
+    val relation: String? = null,
+    val requestData: Any? = null
+) {
+    fun getRequestDataString(mapper: ObjectMapper): String {
+        return when (requestData) {
+            is String -> requestData
+            null -> ""
+            else -> mapper.writeValueAsString(requestData)
+        }
+    }
+}

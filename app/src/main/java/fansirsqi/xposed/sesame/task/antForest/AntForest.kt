@@ -184,6 +184,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
     private var returnWater18: IntegerModelField? = null
     private var returnWater10: IntegerModelField? = null
     private var receiveForestTaskAward: BooleanModelField? = null
+    private var forestVitalityRewardTask: BooleanModelField? = null
     private var waterFriendList: SelectAndCountModelField? = null
     private var waterFriendCount: IntegerModelField? = null
     private var notifyFriend: BooleanModelField? = null
@@ -620,6 +621,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         modelFields.addField(BooleanModelField("combineAnimalPiece", "合成动物碎片", false).also { combineAnimalPiece = it })
         modelFields.addField(BooleanModelField("consumeAnimalProp", "派遣动物伙伴", false).also { consumeAnimalProp = it })
         modelFields.addField(BooleanModelField("receiveForestTaskAward", "森林任务", false).also { receiveForestTaskAward = it })
+        modelFields.addField(BooleanModelField("forestVitalityRewardTask", "蚂蚁森林-领奖励任务", false).also { forestVitalityRewardTask = it })
 
         modelFields.addField(BooleanModelField("forestChouChouLe", "森林寻宝任务", false).also { forestChouChouLe = it })
 
@@ -926,6 +928,10 @@ class AntForest : ModelTask(), EnergyCollectCallback {
                 if (receiveForestTaskAward!!.value) {
                     receiveTaskAward()
                     tc.countDebug("森林任务")
+                }
+                if (forestVitalityRewardTask!!.value) {
+                    doForestVitalityRewardTask()
+                    tc.countDebug(FOREST_REWARD_LOG_PREFIX)
                 }
                 if (ecoLife!!.value) {
                     // 检查是否到达执行时间
@@ -3275,6 +3281,279 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         }
     }
 
+    private fun doForestVitalityRewardTask() {
+        try {
+            forestRewardLog("执行开始")
+            for (round in 1..3) {
+                forestRewardLog("第${round}轮查询任务列表")
+                val listRes = AntForestRpcCall.listForestVitalityTasks()
+                forestRewardLog("任务列表返回: ${if (listRes.isNullOrEmpty()) "<empty>" else listRes}")
+                if (listRes.isNullOrEmpty()) {
+                    forestRewardLog("任务列表返回为空，停止执行")
+                    return
+                }
+
+                val listJo = JSONObject(listRes)
+                if (!ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 查询任务列表失败:", listJo)) {
+                    forestRewardLog("查询任务列表失败: code=${listJo.optString("code")}, desc=${listJo.optString("desc")}, resultCode=${listJo.optString("resultCode")}, resultDesc=${listJo.optString("resultDesc")}")
+                    return
+                }
+
+                val taskInfoList = listJo.optJSONArray("taskInfoList")
+                if (taskInfoList == null || taskInfoList.length() == 0) {
+                    forestRewardLog("任务列表为空，停止执行")
+                    return
+                }
+
+                forestRewardLog("获取到任务数量: ${taskInfoList.length()}")
+                var actionTaken = false
+                for (i in 0 until taskInfoList.length()) {
+                    val taskInfo = taskInfoList.optJSONObject(i)
+                    if (taskInfo == null) {
+                        forestRewardLog("任务[${i + 1}/${taskInfoList.length()}]不是JSON对象，跳过: ${taskInfoList.opt(i)}")
+                        continue
+                    }
+                    if (processForestVitalityRewardTask(taskInfo, i + 1, taskInfoList.length())) {
+                        actionTaken = true
+                    }
+                }
+
+                if (!actionTaken) {
+                    forestRewardLog("本轮没有可处理任务，停止执行")
+                    return
+                }
+
+                forestRewardLog("第${round}轮处理完成，等待800ms后复查任务列表")
+                GlobalThreadPools.sleepCompat(800)
+            }
+            forestRewardLog("达到最大复查轮数，停止执行")
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 执行异常:", t)
+        } finally {
+            forestRewardLog("执行结束")
+        }
+    }
+
+    private fun processForestVitalityRewardTask(taskInfo: JSONObject, index: Int, total: Int): Boolean {
+        var actionTaken = false
+        try {
+            val childTaskTypeList = taskInfo.optJSONArray("childTaskTypeList")
+            if (childTaskTypeList != null && childTaskTypeList.length() > 0) {
+                forestRewardLog("任务[$index/$total]发现子任务数量: ${childTaskTypeList.length()}")
+                for (i in 0 until childTaskTypeList.length()) {
+                    val child = childTaskTypeList.optJSONObject(i)
+                    if (child != null && processForestVitalityRewardTask(child, i + 1, childTaskTypeList.length())) {
+                        actionTaken = true
+                    }
+                }
+            }
+
+            val taskBaseInfo = taskInfo.optJSONObject("taskBaseInfo")
+            if (taskBaseInfo == null) {
+                forestRewardLog("任务[$index/$total]缺少taskBaseInfo，跳过: $taskInfo")
+                return actionTaken
+            }
+
+            val sceneCode = taskBaseInfo.optString("sceneCode")
+            val taskType = taskBaseInfo.optString("taskType")
+            val taskStatus = taskBaseInfo.optString("taskStatus")
+            val bizInfo = parseForestRewardObject(taskBaseInfo.optString("bizInfo"))
+            val taskTitle = bizInfo.optString("taskTitle", taskType)
+            val taskContent = bizInfo.optString("taskContent", "")
+            val energy = bizInfo.optString("energy", "")
+            val autoCompleteTask = bizInfo.optString("autoCompleteTask", "")
+            val taskRights = taskInfo.optJSONObject("taskRights") ?: parseForestRewardObject(taskInfo.optString("taskRights"))
+            val awardCount = taskRights.optInt("awardCount", taskRights.optInt("totalAwardCount", 0))
+            val awardType = taskRights.optString("awardType", "")
+            val alreadyReceiveAwardCount = taskRights.optInt("alreadyReceiveAwardCount", 0)
+            val rightsTimes = taskRights.optInt("rightsTimes", 0)
+            val rightsTimesLimit = taskRights.optInt("rightsTimesLimit", 0)
+
+            forestRewardLog("任务[$index/$total] 名称=$taskTitle, 状态=$taskStatus, 类型=$taskType, 场景=$sceneCode, 内容=$taskContent, energy=$energy, autoCompleteTask=$autoCompleteTask, awardType=$awardType, awardCount=$awardCount, alreadyReceiveAwardCount=$alreadyReceiveAwardCount, rightsTimes=$rightsTimes/$rightsTimesLimit")
+
+            if (taskType.isEmpty() || sceneCode.isEmpty()) {
+                forestRewardLog("任务[$index/$total]缺少sceneCode或taskType，跳过: $taskTitle")
+                return actionTaken
+            }
+
+            // 十周年浇水任务特殊处理（优先于黑名单检查）
+            if (taskType == "ZHRW_10THjiaoshui_202608") {
+                return handleAnniversaryWateringTask(taskType, taskStatus, taskTitle, index, total, awardCount, awardType)
+            }
+
+            if (TaskBlacklist.isTaskInBlacklist(taskType)) {
+                forestRewardLog("任务[$index/$total]命中黑名单，跳过: $taskTitle, taskType=$taskType")
+                return actionTaken
+            }
+
+            if (TaskStatus.FINISHED.name == taskStatus) {
+                actionTaken = receiveForestVitalityReward(sceneCode, taskType, taskTitle, awardCount, awardType)
+            } else if (TaskStatus.TODO.name == taskStatus) {
+                actionTaken = finishAndReceiveForestVitalityReward(sceneCode, taskType, taskTitle, awardCount, awardType)
+            } else {
+                forestRewardLog("任务[$index/$total]状态无需处理，跳过: $taskTitle, 状态=$taskStatus")
+            }
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 处理任务异常:", t)
+        }
+        return actionTaken
+    }
+
+    /**
+     * 十周年浇水任务特殊处理
+     * 1. 调用 forestAnniv10Home 获取活动主页信息（含 waterActivityId）
+     * 2. 调用 receiveAnniversary10Reward 领取入场奖励
+     * 3. 调用 welfareForestAnniversary10Polling 轮询活动状态
+     * 4. 调用 welfareForestWater 浇水获得抽奖机会
+     * 5. 领取任务奖励
+     */
+    private fun handleAnniversaryWateringTask(taskType: String, taskStatus: String, taskTitle: String, index: Int, total: Int, awardCount: Int, awardType: String): Boolean {
+        forestRewardLog("任务[$index/$total]检测到十周年浇水任务，开始特殊处理: $taskTitle, 状态=$taskStatus")
+        val activityId = "forest10Anniversary"
+        var waterActivityId = "08jl2d31wlzfs1atq22te9rrz9v92117" // 默认值
+
+        // 步骤1: 获取活动主页信息
+        try {
+            forestRewardLog("十周年浇水: 获取活动主页...")
+            val homeRes = AntForestRpcCall.doRubickActivity("forestAnniv10Home", activityId)
+            forestRewardLog("十周年浇水: 活动主页返回: ${if (homeRes.isNullOrEmpty()) "<empty>" else homeRes.take(200)}")
+            if (!homeRes.isNullOrEmpty()) {
+                val homeJo = JSONObject(homeRes)
+                if (ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 十周年浇水获取主页失败:", homeJo)) {
+                    // 尝试从 earthPartner.lottery.phase1.waterActivityId 获取
+                    val resData = homeJo.optJSONObject("resData")
+                        ?: homeJo.optJSONObject("actionData")?.optJSONObject("resData")
+                    val phase1 = resData?.optJSONObject("pageProperties")
+                        ?.optJSONObject("earthPartner")
+                        ?.optJSONObject("lottery")
+                        ?.optJSONObject("phase1")
+                    val wId = phase1?.optString("waterActivityId", "")
+                    if (!wId.isNullOrEmpty()) {
+                        waterActivityId = wId
+                        forestRewardLog("十周年浇水: 获取到 waterActivityId=$waterActivityId")
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 十周年浇水获取主页异常:", t)
+        }
+
+        GlobalThreadPools.sleepCompat(300)
+
+        // 步骤2: 领取十周年入场奖励
+        try {
+            forestRewardLog("十周年浇水: 领取入场奖励...")
+            val rewardRes = AntForestRpcCall.doRubickActivity("receiveAnniversary10Reward", activityId)
+            forestRewardLog("十周年浇水: 领取入场奖励返回: ${if (rewardRes.isNullOrEmpty()) "<empty>" else rewardRes.take(200)}")
+            if (!rewardRes.isNullOrEmpty()) {
+                val rewardJo = JSONObject(rewardRes)
+                if (ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 十周年浇水领取入场奖励失败:", rewardJo)) {
+                    forestRewardLog("十周年浇水: 领取入场奖励成功")
+                } else {
+                    forestRewardLog("十周年浇水: 领取入场奖励失败: code=${rewardJo.optString("code")}, desc=${rewardJo.optString("desc")}")
+                }
+            }
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 十周年浇水领取入场奖励异常:", t)
+        }
+
+        GlobalThreadPools.sleepCompat(300)
+
+        // 步骤3: 轮询活动状态
+        try {
+            forestRewardLog("十周年浇水: 轮询活动状态...")
+            val pollingRes = AntForestRpcCall.welfareForestAnniversary10Polling(waterActivityId)
+            forestRewardLog("十周年浇水: 轮询返回: ${if (pollingRes.isNullOrEmpty()) "<empty>" else pollingRes.take(200)}")
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 十周年浇水轮询异常:", t)
+        }
+
+        GlobalThreadPools.sleepCompat(300)
+
+        // 步骤4: 浇水10g获得抽奖机会
+        try {
+            forestRewardLog("十周年浇水: 浇水10g...")
+            val waterRes = AntForestRpcCall.welfareForestWater(waterActivityId, 10)
+            forestRewardLog("十周年浇水: 浇水返回: ${if (waterRes.isNullOrEmpty()) "<empty>" else waterRes.take(200)}")
+            if (!waterRes.isNullOrEmpty()) {
+                val waterJo = JSONObject(waterRes)
+                if (ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 十周年浇水失败:", waterJo)) {
+                    val provideResult = waterJo.optJSONObject("rewardProvideResult")
+                    val outBizNo = provideResult?.optString("outBizNo", "")
+                    forestRewardLog("十周年浇水: 浇水成功, outBizNo=$outBizNo")
+                } else {
+                    forestRewardLog("十周年浇水: 浇水失败: code=${waterJo.optString("code")}, desc=${waterJo.optString("desc")}")
+                }
+            }
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "$FOREST_REWARD_LOG_PREFIX 十周年浇水异常:", t)
+        }
+
+        GlobalThreadPools.sleepCompat(500)
+
+        // 步骤5: 领取任务奖励
+        return receiveForestVitalityReward("ANTFOREST_VITALITY_TASK", taskType, taskTitle, awardCount, awardType)
+    }
+
+    private fun finishAndReceiveForestVitalityReward(sceneCode: String, taskType: String, taskTitle: String, awardCount: Int, awardType: String): Boolean {
+        forestRewardLog("准备完成任务: $taskTitle, taskType=$taskType")
+        val finishRes = AntForestRpcCall.finishForestVitalityTask(sceneCode, taskType)
+        forestRewardLog("完成任务返回[$taskTitle]: ${if (finishRes.isNullOrEmpty()) "<empty>" else finishRes}")
+        if (finishRes.isNullOrEmpty()) {
+            forestRewardLog("完成任务返回为空，跳过领奖: $taskTitle")
+            return false
+        }
+
+        val finishJo = JSONObject(finishRes)
+        if (!ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 完成任务失败:", finishJo)) {
+            val errorCode = finishJo.optString("code", finishJo.optString("resultCode", ""))
+            val errorDesc = finishJo.optString("desc", finishJo.optString("resultDesc", ""))
+            forestRewardLog("完成任务失败: $taskTitle, code=$errorCode, desc=$errorDesc")
+            TaskBlacklist.autoAddToBlacklist(taskType, taskTitle, errorCode)
+            return false
+        }
+
+        val finishAwardResultVO = finishJo.optJSONObject("finishAwardResultVO")
+        forestRewardLog("完成任务成功: $taskTitle, deltaAwardCount=${finishAwardResultVO?.optInt("deltaAwardCount", 0) ?: 0}, totalAwardCount=${finishAwardResultVO?.optInt("totalAwardCount", 0) ?: 0}, hasNextStage=${finishAwardResultVO?.optBoolean("hasNextStage", false) ?: false}")
+        GlobalThreadPools.sleepCompat(500)
+        receiveForestVitalityReward(sceneCode, taskType, taskTitle, awardCount, awardType)
+        return true
+    }
+
+    private fun receiveForestVitalityReward(sceneCode: String, taskType: String, taskTitle: String, awardCount: Int, awardType: String): Boolean {
+        forestRewardLog("准备领取奖励: $taskTitle, taskType=$taskType")
+        val awardRes = AntForestRpcCall.receiveForestVitalityTaskAward(sceneCode, taskType)
+        forestRewardLog("领取奖励返回[$taskTitle]: ${if (awardRes.isNullOrEmpty()) "<empty>" else awardRes}")
+        if (awardRes.isNullOrEmpty()) {
+            forestRewardLog("领取奖励返回为空: $taskTitle")
+            return false
+        }
+
+        val awardJo = JSONObject(awardRes)
+        if (ResChecker.checkRes("$FOREST_REWARD_LOG_PREFIX 领取奖励失败:", awardJo)) {
+            val incAwardCount = awardJo.optInt("incAwardCount", awardCount)
+            val provideRightsSuccess = awardJo.optBoolean("provideRightsSuccess", false)
+            Log.forest("$FOREST_REWARD_LOG_PREFIX 领取[$taskTitle]奖励成功: $awardType*$incAwardCount, provideRightsSuccess=$provideRightsSuccess")
+            return true
+        }
+
+        forestRewardLog("领取奖励失败: $taskTitle, code=${awardJo.optString("code", awardJo.optString("resultCode", ""))}, desc=${awardJo.optString("desc", awardJo.optString("resultDesc", ""))}")
+        return false
+    }
+
+    private fun parseForestRewardObject(json: String?): JSONObject {
+        return try {
+            if (json.isNullOrEmpty()) JSONObject() else JSONObject(json)
+        } catch (t: Throwable) {
+            forestRewardLog("JSON解析失败，使用空对象: $json")
+            JSONObject()
+        }
+    }
+
+    private fun forestRewardLog(message: String) {
+        Log.record(TAG, "$FOREST_REWARD_LOG_PREFIX $message")
+    }
+
     /**
      * 在收集能量之前使用道具。
      * 这个方法检查是否需要使用增益卡
@@ -5013,6 +5292,7 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         private const val TOTAL_HELP_COLLECTED = 0
         private const val TOTAL_WATERED = 0
         private const val MAX_BATCH_SIZE = 6
+        private const val FOREST_REWARD_LOG_PREFIX = "蚂蚁森林-领奖励任务"
 
         // 找能量功能的冷却时间（毫秒），15分钟
         private const val TAKE_LOOK_COOLDOWN_MS = 15 * 60 * 1000L
@@ -5303,5 +5583,12 @@ class AntForest : ModelTask(), EnergyCollectCallback {
         } catch (t: Throwable) {
             Log.printStackTrace(TAG, "manualUseEnergyRain 异常:", t)
         }
+    }
+
+    /**
+     * 手动触发蚂蚁森林领奖励任务
+     */
+    fun manualForestVitalityRewardTask() {
+        doForestVitalityRewardTask()
     }
 }

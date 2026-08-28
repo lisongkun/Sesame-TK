@@ -470,6 +470,10 @@ class ApplicationHook {
                                         extraParams["exchangeEnergyRainCard"] = intent.getBooleanExtra("exchangeEnergyRainCard", false)
                                     }
 
+                                    CustomTask.FOREST_VITALITY_REWARD -> {
+                                        // 蚂蚁森林-领奖励任务无需额外参数
+                                    }
+
                                     CustomTask.FARM_SPECIAL_FOOD -> {
                                         extraParams["specialFoodCount"] = intent.getIntExtra("specialFoodCount", 0)
                                     }
@@ -477,6 +481,10 @@ class ApplicationHook {
                                     CustomTask.FARM_USE_TOOL -> {
                                         extraParams["toolType"] = intent.getStringExtra("toolType") ?: ""
                                         extraParams["toolCount"] = intent.getIntExtra("toolCount", 1)
+                                    }
+
+                                    CustomTask.OCEAN_AI_FISH -> {
+                                        // AI摸鱼无需额外参数
                                     }
 
                                     else -> {

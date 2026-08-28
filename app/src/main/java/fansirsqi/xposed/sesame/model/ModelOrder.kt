@@ -11,6 +11,7 @@ import fansirsqi.xposed.sesame.task.antOcean.AntOcean
 import fansirsqi.xposed.sesame.task.antOrchard.AntOrchard
 import fansirsqi.xposed.sesame.task.antSports.AntSports
 import fansirsqi.xposed.sesame.task.antStall.AntStall
+import fansirsqi.xposed.sesame.task.customTasks.ManualTaskModel
 import fansirsqi.xposed.sesame.task.greenFinance.GreenFinance
 import fansirsqi.xposed.sesame.task.other.OtherTask
 import fansirsqi.xposed.sesame.task.reserve.Reserve
@@ -31,7 +32,8 @@ object ModelOrder {
         GreenFinance::class.java,  // 绿色经营
         Reserve::class.java,       // 保护地
         OtherTask::class.java,      // 其他
-        AnswerAI::class.java         // AI答题
+        AnswerAI::class.java,        // AI答题
+        ManualTaskModel::class.java  // 手动调度任务
 
     )
 

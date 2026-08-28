@@ -318,6 +318,37 @@ public class AntForestRpcCall {
         return RequestManager.requestString("com.alipay.antiep.finishTask", args);
     }
 
+    public static String listForestVitalityTasks() {
+        return RequestManager.requestString(new RpcEntity(
+                "com.alipay.antieptask.listTaskopengreen",
+                "[{\"extend\":{\"businessSource\":\"ANTFOREST-home_task_list\",\"osType\":\"android\",\"version\":\"20260109\"},\"requestType\":\"RPC\",\"sceneCode\":\"ANTFOREST_VITALITY_TASK\",\"source\":\"chInfo_ch_appcenter__chsub_9patch\"}]",
+                null,
+                "antieptask",
+                "listTask",
+                "TaskWebRpc"
+        ));
+    }
+
+    public static String finishForestVitalityTask(String sceneCode, String taskType) throws JSONException {
+        JSONObject jo = new JSONObject();
+        jo.put("outBizNo", taskType + RandomUtil.getRandomTag());
+        jo.put("requestType", "H5");
+        jo.put("sceneCode", sceneCode);
+        jo.put("source", "ANTFOREST");
+        jo.put("taskType", taskType);
+        return RequestManager.requestString("com.alipay.antiep.finishTask", new JSONArray().put(jo).toString());
+    }
+
+    public static String receiveForestVitalityTaskAward(String sceneCode, String taskType) throws JSONException {
+        JSONObject jo = new JSONObject();
+        jo.put("ignoreLimit", false);
+        jo.put("requestType", "H5");
+        jo.put("sceneCode", sceneCode);
+        jo.put("source", "ANTFOREST");
+        jo.put("taskType", taskType);
+        return RequestManager.requestString("com.alipay.antiep.receiveTaskAward", new JSONArray().put(jo).toString());
+    }
+
     public static String antiepSign(String entityId, String userId, String sceneCode)
             throws JSONException {
         JSONObject jo = new JSONObject();
@@ -904,6 +935,35 @@ public class AntForestRpcCall {
                         "  \"source\": \"ANTFOREST\"," +
                         "  \"taskType\": \"" + taskType + "\"" +
                         "}]");
+    }
+
+    /**
+     * 执行 Rubick 活动动作（十周年浇水领奖等）
+     * @param actionCode 活动动作码，如 "receiveAnniversary10Reward"
+     * @param activityId 活动ID，如 "forest10Anniversary"
+     */
+    public static String doRubickActivity(String actionCode, String activityId) {
+        return RequestManager.requestString("alipay.antforest.forest.h5.activity.doRubickActivity",
+                "[{\"actionCode\":\"" + actionCode + "\",\"activityId\":\"" + activityId + "\",\"source\":\"10th_huolizhitask\"}]");
+    }
+
+    /**
+     * 十周年浇水活动轮询（获取浇水活动详情和activityId）
+     * @param activityId 活动ID
+     */
+    public static String welfareForestAnniversary10Polling(String activityId) {
+        return RequestManager.requestString("alipay.antforest.forest.h5.welfareForestAnniversary10Polling",
+                "[{\"activityId\":\"" + activityId + "\",\"source\":\"10th_huolizhitask\"}]");
+    }
+
+    /**
+     * 森林福利浇水
+     * @param activityId 活动ID（从polling接口获取）
+     * @param energy 浇水能量克数
+     */
+    public static String welfareForestWater(String activityId, int energy) {
+        return RequestManager.requestString("alipay.antforest.forest.h5.welfareForestWater",
+                "[{\"activityId\":\"" + activityId + "\",\"activityParam\":{},\"energy\":" + energy + ",\"source\":\"10th_huolizhitask\",\"waterWay\":\"water\"}]");
     }
 
     /** 查询森林乐园限定活动 */

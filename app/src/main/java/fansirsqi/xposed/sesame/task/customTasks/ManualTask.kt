@@ -5,6 +5,8 @@ import fansirsqi.xposed.sesame.hook.CaptchaHook
 import fansirsqi.xposed.sesame.model.Model
 import fansirsqi.xposed.sesame.task.antFarm.AntFarm
 import fansirsqi.xposed.sesame.task.antForest.AntForest
+import fansirsqi.xposed.sesame.task.antOcean.AntOcean
+import fansirsqi.xposed.sesame.task.antSports.AntSports
 import fansirsqi.xposed.sesame.util.GlobalThreadPools
 import fansirsqi.xposed.sesame.util.Log
 import kotlinx.coroutines.Dispatchers
@@ -89,6 +91,15 @@ object ManualTask {
                                 }
                             }
 
+                            CustomTask.FOREST_VITALITY_REWARD -> {
+                                val instance = getForestInstance()
+                                if (instance != null) {
+                                    instance.manualForestVitalityRewardTask()
+                                } else {
+                                    Log.record("ManualTask", "❌ 无法加载森林模块")
+                                }
+                            }
+
                             // 庄园类任务
                             CustomTask.FARM_SEND_BACK_ANIMAL -> getFarmInstance()?.manualSendBackAnimal()
                             CustomTask.FARM_GAME_LOGIC -> getFarmInstance()?.manualFarmGameLogic()
@@ -109,6 +120,26 @@ object ManualTask {
                                     Log.record("ManualTask", "✅ 验证码触发成功")
                                 } else {
                                     Log.record("ManualTask", "❌ 验证码触发失败")
+                                }
+                            }
+
+                            // 海洋类任务
+                            CustomTask.OCEAN_AI_FISH -> {
+                                val instance = getOceanInstance()
+                                if (instance != null) {
+                                    instance.manualAIFish()
+                                } else {
+                                    Log.record("ManualTask", "❌ 无法加载海洋模块")
+                                }
+                            }
+
+                            // 运动类任务
+                            CustomTask.SPORTS_SYNC_STEP -> {
+                                val instance = getSportsInstance()
+                                if (instance != null) {
+                                    instance.manualSyncStep()
+                                } else {
+                                    Log.record("ManualTask", "❌ 无法加载运动模块")
                                 }
                             }
                         }
@@ -152,5 +183,31 @@ object ManualTask {
             }
         }
         return AntFarm.instance
+    }
+
+    /**
+     * 按需获取并确保海洋实例已加载
+     */
+    private fun getOceanInstance(): AntOcean? {
+        val loader = ApplicationHook.classLoader ?: return null
+        return Model.getModel(AntOcean::class.java)?.let {
+            Log.record("ManualTask", "⚙️ 正在按需加载海洋模块...")
+            it.prepare()
+            it.boot(loader)
+            it as? AntOcean
+        }
+    }
+
+    /**
+     * 按需获取并确保运动实例已加载
+     */
+    private fun getSportsInstance(): AntSports? {
+        val loader = ApplicationHook.classLoader ?: return null
+        return Model.getModel(AntSports::class.java)?.let {
+            Log.record("ManualTask", "⚙️ 正在按需加载运动模块...")
+            it.prepare()
+            it.boot(loader)
+            it as? AntSports
+        }
     }
 }
