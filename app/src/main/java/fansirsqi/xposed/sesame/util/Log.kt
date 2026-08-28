@@ -13,6 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger
 object Log {
     private const val DEFAULT_TAG = ""
     private const val MAX_DUPLICATE_ERRORS = 3 // 最多打印3次相同错误
+    private const val CAPTURE_TAG = "capture"
+    private const val MAX_LOGCAT_CAPTURE_BYTES = 3000
 
     // 错误去重机制
     private val errorCountMap = ConcurrentHashMap<String, AtomicInteger>()
@@ -117,7 +119,12 @@ object Log {
 
     @JvmStatic
     fun capture(msg: String) {
+        // Keep the file entry intact while emitting Logcat-safe chunks for live debugging.
         CAPTURE_LOGGER.info("$DEFAULT_TAG{}", msg)
+        val chunks = LogChunker.split(msg, MAX_LOGCAT_CAPTURE_BYTES)
+        chunks.forEachIndexed { index, chunk ->
+            android.util.Log.i(CAPTURE_TAG, "[${index + 1}/${chunks.size}] $chunk")
+        }
     }
 
     @JvmStatic
@@ -214,5 +221,40 @@ object Log {
     fun printStack(tag: String) {
         val stackTrace = "stack: " + android.util.Log.getStackTraceString(Exception("获取当前堆栈$tag:"))
         record(stackTrace)
+    }
+}
+
+internal object LogChunker {
+    fun split(message: String, maxBytes: Int): List<String> {
+        require(maxBytes > 0) { "maxBytes must be positive" }
+        if (message.isEmpty()) return listOf("")
+
+        val chunks = mutableListOf<String>()
+        var chunkStart = 0
+        var index = 0
+        var chunkBytes = 0
+
+        while (index < message.length) {
+            val codePoint = message.codePointAt(index)
+            val codePointLength = Character.charCount(codePoint)
+            val codePointBytes = when {
+                codePoint <= 0x7F -> 1
+                codePoint <= 0x7FF -> 2
+                codePoint <= 0xFFFF -> 3
+                else -> 4
+            }
+
+            if (chunkBytes > 0 && chunkBytes + codePointBytes > maxBytes) {
+                chunks.add(message.substring(chunkStart, index))
+                chunkStart = index
+                chunkBytes = 0
+            }
+
+            chunkBytes += codePointBytes
+            index += codePointLength
+        }
+
+        chunks.add(message.substring(chunkStart))
+        return chunks
     }
 }

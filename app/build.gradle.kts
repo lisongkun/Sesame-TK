@@ -62,7 +62,7 @@ android {
 
         testOptions {
             unitTests.all {
-                it.enabled = false
+                it.enabled = true
             }
         }
     }
@@ -155,6 +155,7 @@ dependencies {
     implementation(composeBom)
 
     testImplementation(composeBom)
+    testImplementation("junit:junit:4.13.2")
     androidTestImplementation(composeBom)
     implementation(libs.androidx.material3)                // Material 3 设计组件
     implementation(libs.androidx.ui.tooling.preview)              // UI 工具预览

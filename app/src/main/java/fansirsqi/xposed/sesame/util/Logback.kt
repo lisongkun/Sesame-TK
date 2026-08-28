@@ -50,6 +50,10 @@ object Logback {
                 addAppender(logcatAppender)
             }
 
+            // Capture records are emitted in safe-sized chunks by Log.capture().
+            // Do not also propagate the original record to the root Logcat appender.
+            lc.getLogger("capture").isAdditive = false
+
         } catch (e: Exception) {
             Log.e("SesameLog", "Logback initLogcatOnly failed", e)
         }
@@ -144,7 +148,7 @@ object Logback {
         // 4. 获取对应的 Logger 并添加 Appender
         lc.getLogger(logName).apply {
             // 这里可以不强制 setLevel，沿用默认配置
-            isAdditive = true
+            isAdditive = logName != "capture"
             addAppender(fileAppender)
         }
     }
