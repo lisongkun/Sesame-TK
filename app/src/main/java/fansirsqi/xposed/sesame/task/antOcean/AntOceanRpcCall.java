@@ -4,6 +4,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import fansirsqi.xposed.sesame.entity.RpcEntity;
 import fansirsqi.xposed.sesame.hook.RequestManager;
 import fansirsqi.xposed.sesame.util.Log;
 import fansirsqi.xposed.sesame.util.RandomUtil;
@@ -232,6 +233,46 @@ public class AntOceanRpcCall {
             Log.printStackTrace(e);
         }
         return null;
+    }
+
+    // AI摸鱼 - 触发摸鱼
+    public static String touchFish() {
+        return RequestManager.requestString("alipay.antaifish.h5.touchfish",
+                "[{\"source\":\"ANT_OCEAN\",\"uniqueId\":\"" + getUniqueId() + "\"}]");
+    }
+
+    // AI摸鱼任务 tag:capture
+    public static String listAIFishTasks() {
+        return RequestManager.requestString(new RpcEntity(
+                "com.alipay.antieptask.listTaskopengreen",
+                "[{\"extend\":{\"appMode\":\"normal\"},\"requestType\":\"RPC\",\"sceneCode\":\"ANTAIFISH\",\"source\":\"ANTAIFISH\",\"uniqueId\":\"" + getUniqueId() + "\"}]",
+                null,
+                "antieptask",
+                "listTask",
+                "TaskWebRpc"
+        ));
+    }
+
+    public static String finishAIFishTask(String sceneCode, String taskType) {
+        return RequestManager.requestString("com.alipay.antiep.finishTask",
+                "[{\"outBizNo\":\"" + taskType + "_" + RandomUtil.nextLong() + "\",\"requestType\":\"H5\",\"sceneCode\":\"" + sceneCode + "\",\"source\":\"ANTAIFISH\",\"taskType\":\"" + taskType + "\",\"uniqueId\":\"" + getUniqueId() + "\"}]");
+    }
+
+    public static String receiveAIFishTaskAward(String sceneCode, String taskType) {
+        return RequestManager.requestString("com.alipay.antieptask.receiveTaskAwardopengreen",
+                "[{\"ignoreLimit\":false,\"requestType\":\"RPC\",\"sceneCode\":\"" + sceneCode + "\",\"source\":\"ANTAIFISH\",\"taskType\":\"" + taskType + "\",\"uniqueId\":\"" + getUniqueId() + "\"}]");
+    }
+
+    // AI摸鱼 - 查询摸鱼主页
+    public static String queryAIFishHomePage() {
+        return RequestManager.requestString("alipay.antaifish.h5.homepage",
+                "[{\"source\":\"ANT_OCEAN\",\"uniqueId\":\"" + getUniqueId() + "\"}]");
+    }
+
+    // AI摸鱼 - 营救被摸走的鱼
+    public static String rescueFish() {
+        return RequestManager.requestString("alipay.antaifish.h5.rescueFish",
+                "[{\"source\":\"ANT_OCEAN\",\"uniqueId\":\"" + getUniqueId() + "\"}]");
     }
 
     /**

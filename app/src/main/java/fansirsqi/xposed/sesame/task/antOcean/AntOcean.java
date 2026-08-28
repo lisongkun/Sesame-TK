@@ -70,6 +70,9 @@ public class AntOcean extends ModelTask {
     }
 
     private static final String TAG = AntOcean.class.getSimpleName();
+    private static final int AI_FISH_TOUCH_MAX_TRY = 20;
+    private static final long AI_FISH_TOUCH_START_DELAY_MS = 3000L;
+    private static final long AI_FISH_TOUCH_INTERVAL_MS = 800L;
 
     @Override
     public String getName() {
@@ -94,6 +97,7 @@ public class AntOcean extends ModelTask {
     private BooleanModelField usePropByType;
     private SelectAndCountModelField protectOceanList;
     private BooleanModelField PDL_task;
+    private BooleanModelField aiFishTask;
     private static ChoiceModelField userprotectType;
 
     public interface protectType {
@@ -117,6 +121,7 @@ public class AntOcean extends ModelTask {
         modelFields.addField(userprotectType = new ChoiceModelField("userprotectType", "保护 | 类型", protectType.DONT_PROTECT, protectType.nickNames));
         modelFields.addField(protectOceanList = new SelectAndCountModelField("protectOceanList", "保护 | 海洋列表", new LinkedHashMap<>(), AlipayBeach::getList));
         modelFields.addField(PDL_task = new BooleanModelField("PDL_task", "潘多拉任务", false));
+        modelFields.addField(aiFishTask = new BooleanModelField("aiFishTask", "AI摸鱼任务", false));
         return modelFields;
     }
 
@@ -147,6 +152,10 @@ public class AntOcean extends ModelTask {
 
             if (PDL_task.getValue()) {
                 doOceanPDLTask();
+            }
+
+            if (aiFishTask.getValue()) {
+                doAIFishTask();
             }
 
         } catch (Throwable t) {
@@ -724,6 +733,305 @@ public class AntOcean extends ModelTask {
                 Throwable t) {
             Log.printStackTrace(TAG, "receiveTaskAward err:", t);
         }
+    }
+
+    /**
+     * 手动触发AI摸鱼任务
+     */
+    public void manualAIFish() {
+        doAIFishTask();
+    }
+
+    private void doAIFishTask() {
+        try {
+            Log.record(TAG, "执行AI摸鱼任务");
+
+            // 领取每日免费摸鱼次数
+            String dailyRes = AntOceanRpcCall.receiveAIFishTaskAward("ANTAIFISH", "daily_add_touch_fish");
+            Log.record(TAG, "AI摸鱼🎣领取每日免费次数返回: " + (StringUtil.isEmpty(dailyRes) ? "<empty>" : dailyRes));
+            if (!StringUtil.isEmpty(dailyRes)) {
+                JSONObject dailyJo = new JSONObject(dailyRes);
+                if (ResChecker.checkRes(TAG + ".dailyAddTouchFish", dailyJo)) {
+                    Log.forest("AI摸鱼🎣领取每日免费摸鱼次数成功");
+                }
+            }
+
+            String s = AntOceanRpcCall.listAIFishTasks();
+            Log.record(TAG, "AI摸鱼🎣任务列表返回: " + (StringUtil.isEmpty(s) ? "<empty>" : s));
+            if (StringUtil.isEmpty(s)) {
+                Log.record(TAG, "AI摸鱼任务列表返回为空");
+                return;
+            }
+
+            JSONObject jo = new JSONObject(s);
+            if (!ResChecker.checkRes(TAG + ".doAIFishTask", jo)) {
+                Log.record(TAG, "查询AI摸鱼任务列表失败");
+                return;
+            }
+
+            JSONArray taskInfoList = jo.optJSONArray("taskInfoList");
+            if (taskInfoList == null || taskInfoList.length() == 0) {
+                Log.record(TAG, "AI摸鱼任务列表为空");
+                if (!checkAndRescueFish()) {
+                    Log.record(TAG, "AI摸鱼🎣营救鱼失败，跳过消耗摸鱼次数");
+                    return;
+                }
+                consumeAIFishTouchChances();
+                return;
+            }
+            Log.record(TAG, "AI摸鱼🎣获取到任务数量: " + taskInfoList.length());
+
+            for (int i = 0; i < taskInfoList.length(); i++) {
+                try {
+                    JSONObject taskInfo = taskInfoList.getJSONObject(i);
+                    JSONObject taskBaseInfo = taskInfo.optJSONObject("taskBaseInfo");
+                    if (taskBaseInfo == null) {
+                        Log.record(TAG, "AI摸鱼🎣任务[" + (i + 1) + "]缺少taskBaseInfo，跳过: " + taskInfo);
+                        continue;
+                    }
+
+                    String sceneCode = taskBaseInfo.optString("sceneCode");
+                    String taskType = taskBaseInfo.optString("taskType");
+                    String taskStatus = taskBaseInfo.optString("taskStatus");
+                    JSONObject bizInfo = new JSONObject(taskBaseInfo.optString("bizInfo"));
+                    String taskTitle = bizInfo.optString("taskTitle", taskType);
+                    Log.record(TAG, "AI摸鱼🎣任务[" + (i + 1) + "/" + taskInfoList.length() + "] 名称=" + taskTitle + ", 状态=" + taskStatus + ", 类型=" + taskType + ", 场景=" + sceneCode);
+
+                    if (TaskStatus.FINISHED.name().equals(taskStatus)) {
+                        Log.record(TAG, "AI摸鱼🎣准备领取奖励: " + taskTitle);
+                        String res = AntOceanRpcCall.receiveAIFishTaskAward(sceneCode, taskType);
+                        Log.record(TAG, "AI摸鱼🎣领取奖励返回[" + taskTitle + "]: " + (StringUtil.isEmpty(res) ? "<empty>" : res));
+                        if (StringUtil.isEmpty(res)) {
+                            Log.record(TAG, "AI摸鱼🎣领取奖励返回为空，跳过: " + taskTitle);
+                            continue;
+                        }
+                        JSONObject resJo = new JSONObject(res);
+                        if (ResChecker.checkRes(TAG + ".receiveAIFishTaskAward", resJo)) {
+                            Log.forest("AI摸鱼🎣[" + taskTitle + "]奖励已领取");
+                        } else {
+                            Log.error(TAG, "AI摸鱼奖励领取失败：" + resJo.optString("desc", ""));
+                        }
+                        GlobalThreadPools.sleepCompat(500);
+                    } else if (TaskStatus.TODO.name().equals(taskStatus)) {
+                        Log.record(TAG, "AI摸鱼🎣准备完成任务: " + taskTitle);
+                        String res = AntOceanRpcCall.finishAIFishTask(sceneCode, taskType);
+                        Log.record(TAG, "AI摸鱼🎣完成任务返回[" + taskTitle + "]: " + (StringUtil.isEmpty(res) ? "<empty>" : res));
+                        if (StringUtil.isEmpty(res)) {
+                            Log.record(TAG, "AI摸鱼🎣完成任务返回为空，跳过领奖: " + taskTitle);
+                            continue;
+                        }
+                        JSONObject resJo = new JSONObject(res);
+                        if (ResChecker.checkRes(TAG + ".finishAIFishTask", resJo)) {
+                            Log.forest("AI摸鱼🎣完成[" + taskTitle + "]");
+                            GlobalThreadPools.sleepCompat(500);
+                            // 尝试领取奖励
+                            String awardRes = AntOceanRpcCall.receiveAIFishTaskAward(sceneCode, taskType);
+                            Log.record(TAG, "AI摸鱼🎣完成后领奖返回[" + taskTitle + "]: " + (StringUtil.isEmpty(awardRes) ? "<empty>" : awardRes));
+                            if (StringUtil.isEmpty(awardRes)) {
+                                Log.record(TAG, "AI摸鱼🎣完成后领奖返回为空: " + taskTitle);
+                                continue;
+                            }
+                            JSONObject awardJo = new JSONObject(awardRes);
+                            if (ResChecker.checkRes(TAG + ".receiveAIFishTaskAward", awardJo)) {
+                                Log.forest("AI摸鱼🎣[" + taskTitle + "]奖励已领取");
+                            } else {
+                                Log.error(TAG, "AI摸鱼完成后领奖失败：" + awardJo.optString("desc", ""));
+                            }
+                        } else {
+                            Log.error(TAG, "AI摸鱼任务完成失败：" + resJo.optString("desc", ""));
+                        }
+                        GlobalThreadPools.sleepCompat(500);
+                    } else {
+                        Log.record(TAG, "AI摸鱼🎣任务状态无需处理，跳过: " + taskTitle + "，状态=" + taskStatus);
+                    }
+                } catch (Throwable t) {
+                    Log.printStackTrace(TAG, "处理AI摸鱼任务异常", t);
+                }
+            }
+
+            // 摸鱼前检查鱼是否被摸走，被摸走则先营救
+            if (!checkAndRescueFish()) {
+                Log.record(TAG, "AI摸鱼🎣营救鱼失败，跳过消耗摸鱼次数");
+                return;
+            }
+
+            consumeAIFishTouchChances();
+        } catch (Throwable t) {
+            Log.printStackTrace(TAG, "doAIFishTask err:", t);
+        }
+    }
+
+    /**
+     * 检查鱼是否被摸走，如果是则营救
+     * @return true 如果鱼是安全的或已成功营救，false 如果营救失败
+     */
+    private boolean checkAndRescueFish() {
+        try {
+            String homeRes = AntOceanRpcCall.queryAIFishHomePage();
+            if (StringUtil.isEmpty(homeRes)) {
+                Log.record(TAG, "AI摸鱼🎣查询主页返回为空，跳过营救检查");
+                return true;
+            }
+            JSONObject homeJo = new JSONObject(homeRes);
+            if (!ResChecker.checkRes(TAG + ".queryAIFishHomePage", homeJo)) {
+                Log.record(TAG, "AI摸鱼🎣查询主页失败，跳过营救检查");
+                return true;
+            }
+            JSONObject myFish = homeJo.optJSONObject("myFish");
+            if (myFish == null) {
+                Log.record(TAG, "AI摸鱼🎣主页无myFish数据，跳过营救检查");
+                return true;
+            }
+            JSONObject interactVO = myFish.optJSONObject("interactVO");
+            if (interactVO == null) {
+                Log.record(TAG, "AI摸鱼🎣主页无interactVO数据，跳过营救检查");
+                return true;
+            }
+            String fishInteractStatus = interactVO.optString("fishInteractStatus", "");
+            if ("CAPTURED".equals(fishInteractStatus)) {
+                Log.record(TAG, "AI摸鱼🎣发现鱼被摸走了，开始营救...");
+                String rescueRes = AntOceanRpcCall.rescueFish();
+                if (StringUtil.isEmpty(rescueRes)) {
+                    Log.error(TAG, "AI摸鱼🎣营救鱼返回为空");
+                    return false;
+                }
+                JSONObject rescueJo = new JSONObject(rescueRes);
+                if (ResChecker.checkRes(TAG + ".rescueFish", rescueJo)) {
+                    Log.forest("AI摸鱼🎣营救鱼成功 🐟");
+                    return true;
+                } else {
+                    Log.error(TAG, "AI摸鱼🎣营救鱼失败：" + rescueJo.optString("resultDesc", rescueJo.optString("desc", "")));
+                    return false;
+                }
+            } else {
+                Log.record(TAG, "AI摸鱼🎣鱼状态正常: " + fishInteractStatus);
+                return true;
+            }
+        } catch (Throwable t) {
+            Log.printStackTrace(TAG, "checkAndRescueFish err:", t);
+            return true; // 异常时不阻塞后续流程
+        }
+    }
+
+    private void consumeAIFishTouchChances() {
+        try {
+            Log.record(TAG, "AI摸鱼🎣任务处理完成，等待" + AI_FISH_TOUCH_START_DELAY_MS + "ms后开始消耗摸鱼次数");
+            GlobalThreadPools.sleepCompat(AI_FISH_TOUCH_START_DELAY_MS);
+
+            int lastRemainTouchChance = -1;
+            for (int i = 1; i <= AI_FISH_TOUCH_MAX_TRY; i++) {
+                Log.record(TAG, "AI摸鱼🎣第" + i + "次摸鱼请求开始");
+                String touchRes = AntOceanRpcCall.touchFish();
+                Log.record(TAG, "AI摸鱼🎣第" + i + "次摸鱼返回: " + (StringUtil.isEmpty(touchRes) ? "<empty>" : touchRes));
+
+                if (StringUtil.isEmpty(touchRes)) {
+                    Log.record(TAG, "AI摸鱼🎣摸鱼返回为空，停止消耗摸鱼次数");
+                    return;
+                }
+
+                JSONObject touchJo = new JSONObject(touchRes);
+                boolean success = ResChecker.checkRes(TAG + ".touchFish", touchJo);
+                String resultCode = touchJo.optString("resultCode", touchJo.optString("code", ""));
+                String resultDesc = touchJo.optString("resultDesc", touchJo.optString("desc", ""));
+                String touchType = touchJo.optString("touchType", "");
+                String rewardSummary = summarizeAIFishTouchRewards(touchJo.optJSONArray("touchRewardList"));
+                int remainTouchChance = optAIFishRemainTouchChance(touchJo);
+                String fishInteractStatus = optAIFishInteractString(touchJo, "fishInteractStatus");
+                String receiveDailyTouchChance = optAIFishInteractString(touchJo, "receiveDailyTouchChance");
+                String touchTotal = optAIFishInteractString(touchJo, "touchTotal");
+
+                Log.record(TAG, "AI摸鱼🎣第" + i + "次摸鱼状态: success=" + success
+                        + ", resultCode=" + resultCode
+                        + ", resultDesc=" + resultDesc
+                        + ", touchType=" + touchType
+                        + ", remainTouchChance=" + remainTouchChance
+                        + ", touchTotal=" + touchTotal
+                        + ", fishInteractStatus=" + fishInteractStatus
+                        + ", receiveDailyTouchChance=" + receiveDailyTouchChance
+                        + ", rewards=" + rewardSummary);
+
+                if (!success) {
+                    Log.record(TAG, "AI摸鱼🎣摸鱼失败，停止消耗摸鱼次数: " + resultDesc);
+                    return;
+                }
+
+                if (remainTouchChance < 0) {
+                    Log.record(TAG, "AI摸鱼🎣未解析到剩余摸鱼次数，停止消耗摸鱼次数");
+                    return;
+                }
+
+                if (remainTouchChance == 0) {
+                    Log.forest("AI摸鱼🎣摸鱼次数已全部消耗完成");
+                    return;
+                }
+
+                if (lastRemainTouchChance == remainTouchChance) {
+                    Log.record(TAG, "AI摸鱼🎣剩余次数没有变化，停止消耗以避免重复请求，remainTouchChance=" + remainTouchChance);
+                    return;
+                }
+                lastRemainTouchChance = remainTouchChance;
+
+                Log.record(TAG, "AI摸鱼🎣剩余摸鱼次数: " + remainTouchChance + "，" + AI_FISH_TOUCH_INTERVAL_MS + "ms后继续");
+                GlobalThreadPools.sleepCompat(AI_FISH_TOUCH_INTERVAL_MS);
+            }
+
+            Log.record(TAG, "AI摸鱼🎣达到摸鱼请求安全上限，停止消耗摸鱼次数，maxTry=" + AI_FISH_TOUCH_MAX_TRY);
+        } catch (Throwable t) {
+            Log.printStackTrace(TAG, "consumeAIFishTouchChances err:", t);
+        }
+    }
+
+    private static int optAIFishRemainTouchChance(JSONObject touchJo) {
+        JSONObject interactVO = optAIFishInteractVO(touchJo);
+        if (interactVO == null) {
+            return -1;
+        }
+        return interactVO.optInt("remainTouchChance", -1);
+    }
+
+    private static String optAIFishInteractString(JSONObject touchJo, String key) {
+        JSONObject interactVO = optAIFishInteractVO(touchJo);
+        if (interactVO == null || !interactVO.has(key)) {
+            return "";
+        }
+        return String.valueOf(interactVO.opt(key));
+    }
+
+    private static JSONObject optAIFishInteractVO(JSONObject touchJo) {
+        JSONObject myFish = touchJo.optJSONObject("myFish");
+        if (myFish == null) {
+            return null;
+        }
+        return myFish.optJSONObject("interactVO");
+    }
+
+    private static String summarizeAIFishTouchRewards(JSONArray rewardList) {
+        if (rewardList == null || rewardList.length() == 0) {
+            return "[]";
+        }
+
+        StringBuilder sb = new StringBuilder("[");
+        for (int i = 0; i < rewardList.length(); i++) {
+            JSONObject reward = rewardList.optJSONObject(i);
+            if (reward == null) {
+                continue;
+            }
+            if (sb.length() > 1) {
+                sb.append("; ");
+            }
+            String itemId = reward.optString("itemId", "");
+            JSONObject extInfo = reward.optJSONObject("extInfo");
+            JSONObject popup = extInfo == null ? null : extInfo.optJSONObject("popup");
+            String rewardType = extInfo == null ? "" : extInfo.optString("rewardType", "");
+            String rewardName = popup == null ? "" : popup.optString("name", "");
+            String rightsNums = popup == null ? "" : popup.optString("rightsNums", "");
+            sb.append("itemId=").append(itemId)
+                    .append(", type=").append(rewardType)
+                    .append(", name=").append(rewardName)
+                    .append(", rightsNums=").append(rightsNums);
+        }
+        sb.append("]");
+        return sb.toString();
     }
 
     private static void answerQuestion() {
