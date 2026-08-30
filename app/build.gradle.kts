@@ -203,6 +203,8 @@ dependencies {
     compileOnly(libs.lombok)                       // Lombok 注解处理器（编译时）
     annotationProcessor(libs.lombok)               // Lombok 注解处理
     implementation(libs.okhttp)                    // OkHttp 网络请求库
+    implementation(libs.coil.compose)              // 图片加载（PK 阵营好友头像）
+    implementation(libs.coil.network.okhttp)       // Coil 3 网络 fetcher，复用项目已有 OkHttp
     implementation(libs.dexkit)                    // DEX 文件分析工具
     implementation(libs.jackson.kotlin)            // Jackson Kotlin 支持
 

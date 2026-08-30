@@ -39,6 +39,8 @@
 | C11 | targetSdk 36，明文 HTTP 默认被禁；manifest 无 `usesCleartextTraffic`、无 network security config。而 `headPortrait` 是 `http://` 开头 | `app/build.gradle.kts:42`、`AndroidManifest.xml` |
 | C12 | `Files.getTargetFileofUser()` 会在文件不存在时**创建空文件** | `Files.kt:137-139` |
 
+| C13 | **实测：`RequestManager.requestString()` 返回的是平铺结构**，`success` / `rankMemberStatus` / `myself` / `totalData` / `friendRanking` 直接在顶层，**没有 `resData` 包裹**。本文档早期版本按 capture 日志写成 `resData.xxx` 是错的 —— capture 记录的是整个 RPC 信封（含 `header`、`ariverRpcTraceId`），而 RPC 方法只返回内层载荷。合并器对两种结构都兼容（`root?.get("resData") ?: root`） | 2026-08-30 真机验证，设备 663fb1e8 |
+
 ### C3 的产品含义
 
 入口放在「账号配置」区块下，但语义是「**当前登录账号**的 PK 阵营好友」，不是每个账号卡片各自一个入口。数据仍按 `userId` 分文件存放，所以切换账号后各自的快照互不干扰；但页面永远只展示当前登录账号的那一份。想看别的账号，必须先在支付宝里切号。
@@ -168,9 +170,23 @@ object PkCampMerger {
 
 1. **拉榜**：`queryTopEnergyChallengeRanking()`。`success != true` → 记日志、直接返回，不动已有快照。
 
-2. **取 status**：读 `rankMemberStatus`。若不等于 `"JOIN"`，**只更新 `rankMemberStatus` 与 `updatedAt`，保留已有的 `members` 原样不动**，然后返回。
+2. **取 status**：读 `rankMemberStatus` 存入快照。
 
-   这一条是硬要求，不是优化。赛季结束后 `rankMemberStatus` 大概率就不再是 `"JOIN"`，如果此时把 `members` 清空，用户一点刷新就会亲手抹掉他唯一想留住的那份名单 —— 而"赛季结束后还能翻出这批人"正是这个功能存在的理由。任何情况下都只增不毁：抓到新名单才覆盖，抓不到就保留旧的。
+   **落盘时的保留规则以「新名单是否为空」为判据，而不是以 `rankMemberStatus` 为判据。**
+   即：新抓到的 `members` 为空、而磁盘上已有非空名单时，保留旧名单，只更新
+   `rankMemberStatus` 与 `updatedAt`；新名单非空则直接覆盖。
+
+   这条是硬要求，不是优化。赛季结束后如果把 `members` 清空，用户一点刷新就会亲手抹掉
+   他唯一想留住的那份名单 —— 而"赛季结束后还能翻出这批人"正是这个功能存在的理由。
+   任何情况下都只增不毁：抓到新名单才覆盖，抓不到就保留旧的。
+
+   > **修订记录（2026-08-30，实现期）**：本条原先写作「`rankMemberStatus != "JOIN"`
+   > 时保留旧 members」。改为以「新名单是否为空」为判据，理由：空列表才是真正的数据
+   > 丢失条件，status 只是它的一个代理指标；若按 status 判据，一旦该字段出现非 JOIN
+   > 的中间态（赛季之间、预热期、或未预期的枚举值）而服务端仍返回了有效名单，新数据
+   > 会被拒绝写入，名单从此冻结再不更新 —— 那是比它想防的问题更糟的后果。
+   > 与「允许缩小到较小的非空名单」那条裁决同源：非空的新数据就是事实，理应胜出。
+   > UI 顶部那条「未加入 PK 赛」横幅仍然读 `rankMemberStatus`，不受此改动影响。
 
 3. **建索引**：
    - `totalData`（全部 30 条）→ `userId -> (rank, energySummation)`。**这是 rank 的唯一权威来源。**
@@ -363,7 +379,8 @@ adb shell su -c 'cat /sdcard/Android/media/com.eg.android.AlipayGphone/sesame-TK
 判定标准：
 
 - `members` 条数等于 `totalData` 条数减 1（自己被剔除）
-- `rank` 从 1 连续递增，无 `-1`
+- `rank` 升序排列，**没有任何 `-1`**。注意：自己被剔除后 rank 必然出现一处缺口
+  （例如自己是 rank 2 时，实际得到 1,3,4…30），这是正确行为，不要按「连续递增」判定
 - `selfUserId` 不出现在 `members` 里
 - `isFriend` 同时存在 `true` 和 `false`（抓包样本里 30 人中有真好友也有陌生人）
 - 前 20 名与第 21-30 名都有非空 `displayName`（证明 `fillUserRobFlag` 补全生效）
@@ -395,3 +412,49 @@ adb shell su -c 'cat /sdcard/Android/media/com.eg.android.AlipayGphone/sesame-TK
 - **已知**：`userId` 是加好友请求的必要入参，本期落盘已保存；执行必须在支付宝进程（C2），因此会复用本期建立的「广播触发 + 落盘」链路；`isFriend` 已经算好，可直接用来过滤掉已是好友的人。
 - **未知**：加好友的 RPC 接口本身。需要在支付宝里手动加一次陌生人、用 `capture` 日志或 `serve-debug/rpc_debug.py` 抓出 `operationType` 与 `requestData` 结构。
 - **需要考虑**：批量加好友大概率有频率限制与风控，一键添加应当串行 + 间隔 + 失败可续，而不是并发轰炸。这会是下一个 spec 的主要内容。
+
+## 13. 交付后遗留事项（2026-08-30 实现完成时记录）
+
+按优先级排列。前两项由终审 review 提出，经权衡判定超出本轮范围、需产品决策。
+
+### 13.1 跨赛季覆盖会丢掉正是本功能想留住的人（最高优先级）
+
+`PkCampStore.reconcile` 只保证「不会覆盖成空」。赛季 N+1 的非空名单会**整体替换**赛季 N
+的名单。而「一键添加好友」要更晚才上线 —— 第一批陌生人很可能在用户有能力添加他们之前
+就已被新赛季名单冲掉，这恰好落空了本功能存在的理由。
+
+可选解法：按 `userId` 求并集，给 `PkCampMember` 增加 `lastSeenAt`，UI 上区分「本赛季」
+与「往期」成员。这会改变 `pkCamp.json` 格式，且需决定往期成员如何展示、是否设上限，
+故留给产品决策，本轮未实现。
+
+### 13.2 `Files.write2File` 非原子写
+
+先截断再写。若进程在写入瞬间被杀，名单会被毁掉，UI 随后显示成「还没有数据」。
+`DataStore.saveToDisk` 已用 tmp + rename 可参照。但 `write2File` 是全项目共用函数，
+改它超出本分支范围。
+
+### 13.3 真机 UI 验证尚未完成
+
+已通过：26 项单元测试、`assembleDebug`、以及真机**数据链路**验证（广播 → 支付宝进程
+重写 `pkCamp.json`，29 人 / 1 好友 / 28 陌生人 / 3 条空头像）。
+
+但**渲染层未经任何人眼确认**（验证时设备处于图案锁屏，随后断开连接）。风险最高的三处：
+头像加载（若 https 不可服务则 `AsyncImage` 失败、露出底层首字圆圈 —— 已按终审建议做了
+兜底但未实测）；`joined=false` 横幅 + 「更新于」+ chip 行 + `fillMaxSize` 的 LazyColumn
+在普通 `Column` 里的叠放（静态分析正确，因 Column 最后测量无权重子项）；刷新转圈 →
+超时 Snackbar 的路径。合并进 release 前应先真机打开一次。
+
+### 13.4 `.gitignore:82` 的裸 `test` 规则
+
+该规则匹配任意名为 `test` 的目录，`app/src/test/` 因此整体被忽略 —— 本分支的测试文件
+是靠 `git add -f` 才入库的，而在此之前仓库里一个测试文件都没有（既有的
+`LogChunkerTest.kt` 从未提交）。下一位贡献者写的测试会静默消失。建议改成 `/test/`
+之类更精确的写法。属仓库级问题，与本功能无关。
+
+### 13.5 合并时须处理
+
+分支上的 `a90462ce`（`fix(sports): 补充 manualSyncStep`）是为让分支能编译而加的最小
+兜底 —— 已提交的 `main` 因 `ManualTask.kt` 调用了不存在的 `AntSports.manualSyncStep()`
+而无法编译。用户工作区里有独立且更完整的实现（驱动捕获到的 `rpcManagerInstance`），
+分支上的兜底只是转调 `syncStepTask()`，语义不同。**合并时应丢弃 `a90462ce`，采用用户
+自己的版本。**

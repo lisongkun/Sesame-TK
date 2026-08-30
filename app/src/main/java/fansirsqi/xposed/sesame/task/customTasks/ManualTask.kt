@@ -142,6 +142,16 @@ object ManualTask {
                                     Log.record("ManualTask", "❌ 无法加载运动模块")
                                 }
                             }
+
+                            // PK 阵营好友
+                            CustomTask.FOREST_PK_CAMP -> {
+                                val instance = getForestInstance()
+                                if (instance != null) {
+                                    instance.manualFetchPkCampFriends()
+                                } else {
+                                    Log.record("ManualTask", "❌ 无法加载森林模块")
+                                }
+                            }
                         }
                     } catch (t: Throwable) {
                         Log.record("ManualTask", "❌ 执行 ${task.displayName} 出错: ${t.message}")

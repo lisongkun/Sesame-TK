@@ -82,6 +82,10 @@
             android:exported="false"
             android:label="手动任务" />
 
+        <activity
+            android:name=".ui.PkCampActivity"
+            android:exported="false" />
+
 
         <!-- for-hide-icon -->
         <activity-alias

@@ -487,6 +487,10 @@ class ApplicationHook {
                                         // AI摸鱼无需额外参数
                                     }
 
+                                    CustomTask.FOREST_PK_CAMP -> {
+                                        // 拉取PK阵营好友无需额外参数
+                                    }
+
                                     else -> {
                                         record(TAG, "❌ 无效的任务指令: $taskName")
                                     }
