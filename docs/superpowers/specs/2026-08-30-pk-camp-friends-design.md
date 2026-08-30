@@ -33,7 +33,7 @@
 | C5 | 模块 UI 进程能直接读 `friend.json`（`SettingActivity` 已在做） | `SettingActivity.java:74` |
 | C6 | 广播接收器只在 `if (BuildConfig.DEBUG)` 里注册 | `ApplicationHook.kt:719-725` |
 | C7 | `CustomTask.entries` 被手动任务页直接遍历，新增枚举值会自动多出一张卡 | `ManualTaskScreen.kt:37` |
-| C8 | `ApplicationHook` 的手动任务 `when (task)` 只用于取额外参数，无参任务不需要加分支 | `ApplicationHook.kt:463` |
+| C8 | `ApplicationHook` 的手动任务 `when (task)` 只用于取额外参数，且有 `else` 兜底，所以新增枚举值**不会**破坏编译。但那个 `else` 会打出「❌ 无效的任务指令」，对无参任务是误导性错误日志 —— 这就是 `FOREST_VITALITY_REWARD` 特意写了一个空分支的原因。新任务必须照此加一个带注释的空分支 | `ApplicationHook.kt:463`、`:474-476`、`:489-491` |
 | C9 | `ManualTask.isManualEnabled` 全项目从未被赋值，恒为 `true`，不构成阻碍；但 `isManualRunning` 是真的互斥门，运行中的重复触发会被丢弃 | `ManualTask.kt:24`、`:48`、`:60-65` |
 | C10 | 项目无图片加载库（只有 OkHttp），需要新增 Coil | `app/build.gradle.kts:143-217` |
 | C11 | targetSdk 36，明文 HTTP 默认被禁；manifest 无 `usesCleartextTraffic`、无 network security config。而 `headPortrait` 是 `http://` 开头 | `app/build.gradle.kts:42`、`AndroidManifest.xml` |
@@ -140,7 +140,31 @@ data class PkCampSnapshot(
 
 新增 `AntForest.manualFetchPkCampFriends()`，命名跟随 `manualWhackMole` / `manualUseEnergyRain` 的既有习惯（`AntForest.kt:5537`、`:5567`）。
 
-### 步骤
+### 拆分：纯函数合并器 + I/O 外壳
+
+第 3-8 步全是对 JSON 的纯数据变换，不碰任何 Android API。把它抽成独立的纯函数，就能在 JVM 单元测试里完整覆盖，不需要设备：
+
+```kotlin
+object PkCampMerger {
+    fun merge(
+        rankingJson: String,              // queryTopEnergyChallengeRanking 的原始返回
+        fillJsons: List<String>,          // 各批 fillUserRobFlag 的原始返回
+        friendIds: Set<String>,           // 由调用方传入，来自 UserMap.getUserIdSet()
+        now: Long                         // 由调用方传入，便于断言 updatedAt
+    ): PkCampSnapshot?                    // 拉榜失败返回 null，调用方据此跳过落盘
+
+    fun missingUserIds(rankingJson: String): List<String>   // 供调用方决定要补哪些人
+}
+```
+
+两条硬约束：
+
+1. **合并器只用 Jackson，绝不用 `org.json`。** `org.json` 在 JVM 单元测试里是 android.jar 的桩，一调就抛 `RuntimeException("Stub!")`。已实测确认 Jackson 在 `:app:testDebugUnitTest` 下正常工作。
+2. **`friendIds` 和 `now` 由调用方注入，合并器内部不碰 `UserMap` / `System.currentTimeMillis()`。** `UserMap` 依赖 `Files`、`Log`，全是 Android 耦合；注入之后合并器是纯的，测试可以精确断言。
+
+`AntForest.manualFetchPkCampFriends()` 因此只剩薄薄一层外壳：发 RPC、把字符串喂给合并器、拿 `UserMap.getUserIdSet()`、写文件。
+
+## 6.1 步骤明细
 
 1. **拉榜**：`queryTopEnergyChallengeRanking()`。`success != true` → 记日志、直接返回，不动已有快照。
 
@@ -186,7 +210,11 @@ data class PkCampSnapshot(
 └────────────────────────────┘
 ```
 
-用 `SettingsItem(title, subtitle, icon, onClick)` 现成组件（`components/SettingsItem.kt:24`），图标 `Icons.Rounded.Groups`。点击走既有的事件模式：`onEvent(MainActivity.MainUiEvent.OpenPkCamp)` → `MainActivity.handleEvent` 里 `startActivity(PkCampActivity)`，与 `MainUiEvent.OpenExtend`（`MainActivity.kt:164`）一致。
+用 `SettingsItem(title, subtitle, icon, onClick)` 现成组件（`components/SettingsItem.kt:24`），图标 `Icons.Rounded.Groups`（该文件已 import）。
+
+点击**直接启动 Activity**：`context.startActivity(Intent(context, PkCampActivity::class.java))`，与同文件里「RPC 调试工具」（`SettingsContent.kt:127`）和「手动调度任务」（`:137`）的既有做法一致。
+
+**不新增 `MainUiEvent`。** `MainUiEvent` 是留给必须由 `MainActivity` 处理的事情（打开日志文件、验证门控、清空配置）；单纯跳一个 Activity 走事件绕一圈是多余的仪式。
 
 ### 页面分层
 
@@ -255,7 +283,7 @@ sealed interface PkCampUiState {
 
 新增 Coil 3（Kotlin 2.3.0，用 Coil 3.x）：
 
-- `gradle/libs.versions.toml`：加 `coil = "3.3.0"`，加 `coil-compose`、`coil-network-okhttp` 两个 library 条目
+- `gradle/libs.versions.toml`：加 `coil = "3.2.0"`（查证过的 Maven Central 最新稳定版），加 `coil-compose`、`coil-network-okhttp` 两个 library 条目
 - `app/build.gradle.kts`：`implementation(libs.coil.compose)`、`implementation(libs.coil.network.okhttp)`
 
 Coil 3 必须显式引入网络 fetcher，`coil-network-okhttp` 复用项目已有的 OkHttp（C10）。
@@ -281,18 +309,23 @@ private fun String.toHttpsUrl(): String =
 | `app/build.gradle.kts` | 引入两个 Coil 依赖 |
 | `app/src/main/AndroidManifest.xml` | 声明 `.ui.PkCampActivity`，`android:exported="false"` |
 | `entity/PkCampSnapshot.kt` | **新增** `PkCampMember` + `PkCampSnapshot` |
+| `task/antForest/PkCampMerger.kt` | **新增** 纯函数合并器（JVM 可测，只用 Jackson） |
+| `task/antForest/PkCampStore.kt` | **新增** 纯函数：序列化 + 「只增不毁」合并规则（JVM 可测） |
+| `app/src/test/java/.../PkCampMergerTest.kt` | **新增** 合并器单元测试 |
+| `app/src/test/java/.../PkCampStoreTest.kt` | **新增** 存储与不变式单元测试 |
 | `task/customTasks/CustomTask.kt` | 新增 `FOREST_PK_CAMP("PK阵营好友")` |
 | `task/customTasks/ManualTask.kt` | `when (task)` 加分支 → `getForestInstance()?.manualFetchPkCampFriends()` |
 | `task/antForest/AntForest.kt` | 新增 `manualFetchPkCampFriends()`：抓取 + 合并 + diff + 落盘 |
 | `ui/PkCampActivity.kt` | **新增** Activity 壳 |
 | `ui/screen/PkCampScreen.kt` | **新增** 列表 UI |
+| `ui/screen/components/PkCampMemberRow.kt` | **新增** 单个成员行（头像/首字占位、chip） |
 | `ui/viewmodel/PkCampViewModel.kt` | **新增** 读文件 / 发广播 / 轮询 |
-| `ui/screen/content/SettingsContent.kt` | 「账号配置」区块加入口 |
-| `ui/MainActivity.kt` | 加 `MainUiEvent.OpenPkCamp` 与分发分支 |
+| `ui/screen/content/SettingsContent.kt` | 「账号配置」区块加入口，直接 `startActivity` |
+| `hook/ApplicationHook.kt` | 手动任务 `when (task)` 加一个带注释的空分支，避免落进 `else` 打出误导性的「❌ 无效的任务指令」（C8） |
 
 `AntForestRpcCall.java` **不改动** —— 两个 RPC 方法都已就绪（C1）。
 
-`ApplicationHook.kt` **不改动** —— 手动任务分发的 `when` 只取额外参数，无参任务不需要分支（C8）。
+`ui/MainActivity.kt` **不改动** —— 入口直接 `startActivity`，不走 `MainUiEvent`（见第 7 节）。
 
 ### 关于 C6（广播只在 DEBUG 注册）
 
