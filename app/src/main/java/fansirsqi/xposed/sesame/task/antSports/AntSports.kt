@@ -398,6 +398,13 @@ class AntSports : ModelTask() {
     }
 
     /**
+     * 手动触发步数同步
+     */
+    fun manualSyncStep() {
+        syncStepTask()
+    }
+
+    /**
      * @brief 计算今日用于同步的随机步数
      *
      * @return 步数值（最大 100000）
