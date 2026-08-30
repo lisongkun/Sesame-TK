@@ -41,6 +41,7 @@ import fansirsqi.xposed.sesame.SesameApplication.Companion.PREFERENCES_KEY
 import fansirsqi.xposed.sesame.entity.UserEntity
 import fansirsqi.xposed.sesame.ui.MainActivity
 import fansirsqi.xposed.sesame.ui.ManualTaskActivity
+import fansirsqi.xposed.sesame.ui.PkCampActivity
 import fansirsqi.xposed.sesame.ui.RpcDebugActivity
 import fansirsqi.xposed.sesame.ui.compose.CommonAlertDialog
 import fansirsqi.xposed.sesame.ui.extension.joinQQGroup
@@ -95,6 +96,17 @@ fun SettingsContent(
                         context.performNavigationToSettings(user)
                     })
                 }
+            }
+
+            item {
+                SettingsItem(
+                    title = "PK 阵营好友",
+                    subtitle = "当前登录账号的同阵营成员",
+                    icon = Icons.Rounded.Groups,
+                    onClick = {
+                        context.startActivity(Intent(context, PkCampActivity::class.java))
+                    }
+                )
             }
 
             // 通用功能部分
