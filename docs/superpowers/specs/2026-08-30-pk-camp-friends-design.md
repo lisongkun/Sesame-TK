@@ -170,9 +170,23 @@ object PkCampMerger {
 
 1. **拉榜**：`queryTopEnergyChallengeRanking()`。`success != true` → 记日志、直接返回，不动已有快照。
 
-2. **取 status**：读 `rankMemberStatus`。若不等于 `"JOIN"`，**只更新 `rankMemberStatus` 与 `updatedAt`，保留已有的 `members` 原样不动**，然后返回。
+2. **取 status**：读 `rankMemberStatus` 存入快照。
 
-   这一条是硬要求，不是优化。赛季结束后 `rankMemberStatus` 大概率就不再是 `"JOIN"`，如果此时把 `members` 清空，用户一点刷新就会亲手抹掉他唯一想留住的那份名单 —— 而"赛季结束后还能翻出这批人"正是这个功能存在的理由。任何情况下都只增不毁：抓到新名单才覆盖，抓不到就保留旧的。
+   **落盘时的保留规则以「新名单是否为空」为判据，而不是以 `rankMemberStatus` 为判据。**
+   即：新抓到的 `members` 为空、而磁盘上已有非空名单时，保留旧名单，只更新
+   `rankMemberStatus` 与 `updatedAt`；新名单非空则直接覆盖。
+
+   这条是硬要求，不是优化。赛季结束后如果把 `members` 清空，用户一点刷新就会亲手抹掉
+   他唯一想留住的那份名单 —— 而"赛季结束后还能翻出这批人"正是这个功能存在的理由。
+   任何情况下都只增不毁：抓到新名单才覆盖，抓不到就保留旧的。
+
+   > **修订记录（2026-08-30，实现期）**：本条原先写作「`rankMemberStatus != "JOIN"`
+   > 时保留旧 members」。改为以「新名单是否为空」为判据，理由：空列表才是真正的数据
+   > 丢失条件，status 只是它的一个代理指标；若按 status 判据，一旦该字段出现非 JOIN
+   > 的中间态（赛季之间、预热期、或未预期的枚举值）而服务端仍返回了有效名单，新数据
+   > 会被拒绝写入，名单从此冻结再不更新 —— 那是比它想防的问题更糟的后果。
+   > 与「允许缩小到较小的非空名单」那条裁决同源：非空的新数据就是事实，理应胜出。
+   > UI 顶部那条「未加入 PK 赛」横幅仍然读 `rankMemberStatus`，不受此改动影响。
 
 3. **建索引**：
    - `totalData`（全部 30 条）→ `userId -> (rank, energySummation)`。**这是 rank 的唯一权威来源。**
