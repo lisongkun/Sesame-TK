@@ -39,6 +39,45 @@ class PkCampMergerTest {
         }}
     """.trimIndent()
 
+    /**
+     * 真实支付宝 queryTopEnergyChallengeRanking 的返回是「平铺」的：
+     * success / rankMemberStatus / myself / totalData / friendRanking 直接在顶层，
+     * 没有 resData 包裹。（capture 日志记录的是整个 RPC 信封，而
+     * RequestManager.requestString() 只返回内层载荷 —— 设计文档据此误写了 resData 包裹。）
+     *
+     * 下面这组 flat 系列 fixture 才是线上真实形态；上面带 resData 的 wrapped 系列
+     * 仅用于向后兼容 regression（兼容分支见 PkCampMerger.readResData）。
+     */
+    private val flatRankingJson = """
+        {
+          "success":true,
+          "rankMemberStatus":"JOIN",
+          "myself":{"userId":"s-self"},
+          "totalData":[
+            {"userId":"u-3","rank":3,"energySummation":13938},
+            {"userId":"s-self","rank":2,"energySummation":31817},
+            {"userId":"u-1","rank":1,"energySummation":41280}
+          ],
+          "friendRanking":[
+            {"userId":"u-1","displayName":"淡泊","headPortrait":"http://cdn/a",
+             "treeAmount":439,"challengeRankLevelName":"青铜","rank":1,"energySummation":41280},
+            {"userId":"s-self","displayName":"我","headPortrait":"","treeAmount":51,
+             "challengeRankLevelName":"青铜","rank":2,"energySummation":31817}
+          ]
+        }
+    """.trimIndent()
+
+    /** 平铺版 fillUserRobFlag 返回，rank 仍是 -1，必须被丢弃 */
+    private val flatFillJson = """
+        {
+          "success":true,
+          "friendRanking":[
+            {"userId":"u-3","displayName":"友良","headPortrait":"http://cdn/c",
+             "treeAmount":41,"challengeRankLevelName":"青铜","rank":-1,"energySummation":0}
+          ]
+        }
+    """.trimIndent()
+
     @Test
     fun `missingUserIds returns ids present in totalData but absent from friendRanking`() {
         assertEquals(listOf("u-3"), PkCampMerger.missingUserIds(rankingJson))
@@ -116,5 +155,40 @@ class PkCampMergerTest {
     @Test
     fun `missingUserIds returns empty list on unparseable input`() {
         assertEquals(emptyList<String>(), PkCampMerger.missingUserIds("garbage"))
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 平铺形态（线上真实形状）覆盖 —— 见 flatRankingJson 的注释
+    // ─────────────────────────────────────────────────────────────
+
+    @Test
+    fun `merge parses the flat live response shape`() {
+        val snapshot = PkCampMerger.merge(flatRankingJson, listOf(flatFillJson), emptySet(), 1000L)!!
+        assertEquals(listOf("u-1", "u-3"), snapshot.members.map { it.userId })
+        assertEquals("s-self", snapshot.selfUserId)
+        assertEquals("JOIN", snapshot.rankMemberStatus)
+    }
+
+    @Test
+    fun `merge on flat shape takes rank from totalData and discards the minus one from fillUserRobFlag`() {
+        val snapshot = PkCampMerger.merge(flatRankingJson, listOf(flatFillJson), emptySet(), 1000L)!!
+        val u3 = snapshot.members.first { it.userId == "u-3" }
+        assertEquals(3, u3.rank)
+        assertEquals(13938L, u3.energySummation)
+        // 资料字段仍取自 fillUserRobFlag，即使其 rank 是 -1
+        assertEquals("友良", u3.displayName)
+        assertEquals(41, u3.treeAmount)
+    }
+
+    @Test
+    fun `merge on flat shape excludes self from members`() {
+        val snapshot = PkCampMerger.merge(flatRankingJson, listOf(flatFillJson), setOf("u-3"), 1000L)!!
+        assertFalse(snapshot.members.any { it.userId == "s-self" })
+        assertTrue(snapshot.members.first { it.userId == "u-3" }.isFriend)
+    }
+
+    @Test
+    fun `missingUserIds works on a flat ranking response`() {
+        assertEquals(listOf("u-3"), PkCampMerger.missingUserIds(flatRankingJson))
     }
 }
