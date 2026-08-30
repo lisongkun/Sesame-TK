@@ -39,6 +39,8 @@
 | C11 | targetSdk 36，明文 HTTP 默认被禁；manifest 无 `usesCleartextTraffic`、无 network security config。而 `headPortrait` 是 `http://` 开头 | `app/build.gradle.kts:42`、`AndroidManifest.xml` |
 | C12 | `Files.getTargetFileofUser()` 会在文件不存在时**创建空文件** | `Files.kt:137-139` |
 
+| C13 | **实测：`RequestManager.requestString()` 返回的是平铺结构**，`success` / `rankMemberStatus` / `myself` / `totalData` / `friendRanking` 直接在顶层，**没有 `resData` 包裹**。本文档早期版本按 capture 日志写成 `resData.xxx` 是错的 —— capture 记录的是整个 RPC 信封（含 `header`、`ariverRpcTraceId`），而 RPC 方法只返回内层载荷。合并器对两种结构都兼容（`root?.get("resData") ?: root`） | 2026-08-30 真机验证，设备 663fb1e8 |
+
 ### C3 的产品含义
 
 入口放在「账号配置」区块下，但语义是「**当前登录账号**的 PK 阵营好友」，不是每个账号卡片各自一个入口。数据仍按 `userId` 分文件存放，所以切换账号后各自的快照互不干扰；但页面永远只展示当前登录账号的那一份。想看别的账号，必须先在支付宝里切号。
@@ -363,7 +365,8 @@ adb shell su -c 'cat /sdcard/Android/media/com.eg.android.AlipayGphone/sesame-TK
 判定标准：
 
 - `members` 条数等于 `totalData` 条数减 1（自己被剔除）
-- `rank` 从 1 连续递增，无 `-1`
+- `rank` 升序排列，**没有任何 `-1`**。注意：自己被剔除后 rank 必然出现一处缺口
+  （例如自己是 rank 2 时，实际得到 1,3,4…30），这是正确行为，不要按「连续递增」判定
 - `selfUserId` 不出现在 `members` 里
 - `isFriend` 同时存在 `true` 和 `false`（抓包样本里 30 人中有真好友也有陌生人）
 - 前 20 名与第 21-30 名都有非空 `displayName`（证明 `fillUserRobFlag` 补全生效）

@@ -119,7 +119,9 @@ git commit -m "feat(forest): 新增 PK 阵营成员快照数据模型"
 
 这是整个功能的逻辑核心，也是唯一能在 JVM 上完整测试的部分。Task 4 的 I/O 外壳只负责把字符串喂进来。
 
-**RPC 响应结构提要**（来自实际抓包，测试夹具照此构造）：
+**RPC 响应结构提要**（⚠️ 已被真机验证修正：`RequestManager.requestString()` 返回的是
+**平铺**结构，没有 `resData` 包裹。下面示意里的 `resData` 层来自 capture 日志，而 capture
+记录的是整个 RPC 信封，与方法实际返回值不同。合并器对两种结构都兼容）：
 
 ```
 { "resData": {
@@ -738,7 +740,8 @@ adb shell su -c 'cat /sdcard/Android/media/com.eg.android.AlipayGphone/sesame-TK
 判定标准：
 
 - `members` 条数 = `totalData` 条数 − 1（自己被剔除）
-- `rank` 从 1 起连续递增，**没有任何 `-1`**
+- `rank` 从 1 起升序，**没有任何 `-1`**。注意：自己被剔除后必然有一处缺口（本例 self 为
+  rank 2，实际得到 1,3,4…30），这是正确行为，不要按「连续」判定
 - `selfUserId` 不出现在 `members` 里
 - `isFriend` 同时存在 `true` 和 `false`
 - 排名 21 以后的成员也有非空 `displayName`（证明 `fillUserRobFlag` 补全生效）
