@@ -4,6 +4,7 @@ import fansirsqi.xposed.sesame.entity.PkCampMember
 import fansirsqi.xposed.sesame.entity.PkCampSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PkCampStoreTest {
@@ -20,8 +21,14 @@ class PkCampStoreTest {
 
     @Test
     fun `serialize then deserialize round trips`() {
-        val back = PkCampStore.deserialize(PkCampStore.serialize(joined))
+        val json = PkCampStore.serialize(joined)
+        val back = PkCampStore.deserialize(json)
         assertEquals(joined, back)
+        // 文件格式是「加好友」后续工作的契约，键名被改坏时这里必须失败。
+        // is 前缀布尔最危险：jackson-module-kotlin 靠构造参数名发出 isFriend，目前没别处钉住它。
+        assertTrue(json.contains("\"isFriend\""))
+        assertTrue(json.contains("\"userId\""))
+        assertTrue(json.contains("\"members\""))
     }
 
     @Test
@@ -55,7 +62,7 @@ class PkCampStoreTest {
     }
 
     @Test
-    fun `reconcile preserves existing members when fresh is not joined`() {
+    fun `reconcile preserves existing members when fresh members are empty`() {
         // 这是本设计最关键的不变式：赛季结束后刷新不得抹掉名单
         val quit = joined.copy(rankMemberStatus = "QUIT", members = emptyList(), updatedAt = 200L)
         val result = PkCampStore.reconcile(quit, joined)
@@ -65,11 +72,27 @@ class PkCampStoreTest {
     }
 
     @Test
-    fun `reconcile accepts fresh members when not joined but existing is empty`() {
+    fun `reconcile keeps fresh when both fresh and existing members are empty`() {
         val quit = joined.copy(rankMemberStatus = "QUIT", members = emptyList())
         val result = PkCampStore.reconcile(quit, null)
         assertEquals(emptyList<PkCampMember>(), result.members)
         assertEquals("QUIT", result.rankMemberStatus)
+    }
+
+    @Test
+    fun `reconcile accepts a fresh QUIT roster when it still has members`() {
+        // 这条用例存在是为了挡住「状态非 JOIN 就保留旧名单」的规则回归：reconcile
+        // 只按 members 空/非空判定，从不读 rankMemberStatus。赛季结束后状态是 QUIT，
+        // 但服务端仍可能返回有效名单，此时新名单必须获胜，否则名单会被永久冻结。
+        val quitWithRoster = joined.copy(
+            rankMemberStatus = "QUIT",
+            members = listOf(member("fresh-1", 1), member("fresh-2", 2)),
+            updatedAt = 500L
+        )
+        val result = PkCampStore.reconcile(quitWithRoster, joined)
+        assertEquals(listOf("fresh-1", "fresh-2"), result.members.map { it.userId })
+        assertEquals("QUIT", result.rankMemberStatus)
+        assertEquals(500L, result.updatedAt)
     }
 
     @Test

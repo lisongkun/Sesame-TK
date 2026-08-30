@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import fansirsqi.xposed.sesame.BuildConfig
 import fansirsqi.xposed.sesame.entity.PkCampMember
 import fansirsqi.xposed.sesame.ui.screen.components.PkCampMemberRow
 import fansirsqi.xposed.sesame.ui.viewmodel.PkCampUiState
@@ -61,11 +62,14 @@ fun PkCampScreen(
                     }
                 },
                 actions = {
-                    if (isRefreshing) {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp).padding(end = 12.dp))
-                    } else {
-                        IconButton(onClick = onRefresh) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
+                    if (BuildConfig.DEBUG) {
+                        if (isRefreshing) {
+                            // padding 在 size 外侧，否则 12dp padding 挤进固定 24dp 变椭圆
+                            CircularProgressIndicator(modifier = Modifier.padding(end = 12.dp).size(24.dp))
+                        } else {
+                            IconButton(onClick = onRefresh) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = "刷新")
+                            }
                         }
                     }
                 }
@@ -78,7 +82,10 @@ fun PkCampScreen(
                     "未检测到已登录账号，请先在支付宝登录并让模块跑一次"
                 )
 
-                PkCampUiState.NeverFetched -> CenteredHint("还没有数据，点右上角刷新")
+                PkCampUiState.NeverFetched -> CenteredHint(
+                    if (BuildConfig.DEBUG) "还没有数据，点右上角刷新"
+                    else "还没有数据，刷新快照需要调试版（DEBUG）构建"
+                )
 
                 is PkCampUiState.Content -> {
                     if (!state.joined && state.members.isEmpty()) {

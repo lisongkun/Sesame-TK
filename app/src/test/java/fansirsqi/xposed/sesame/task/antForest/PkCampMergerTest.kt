@@ -115,6 +115,29 @@ class PkCampMergerTest {
     }
 
     @Test
+    fun `merge deduplicates members with a duplicated userId in totalData`() {
+        val dupRanking = """
+            {"resData":{
+              "success":true,
+              "rankMemberStatus":"JOIN",
+              "myself":{"userId":"s-self"},
+              "totalData":[
+                {"userId":"u-1","rank":1,"energySummation":41280},
+                {"userId":"u-1","rank":2,"energySummation":30000},
+                {"userId":"u-2","rank":3,"energySummation":13938}
+              ],
+              "friendRanking":[
+                {"userId":"u-1","displayName":"淡泊","headPortrait":"http://cdn/a",
+                 "treeAmount":439,"challengeRankLevelName":"青铜","rank":1,"energySummation":41280}
+              ]
+            }}
+        """.trimIndent()
+        val snapshot = PkCampMerger.merge(dupRanking, emptyList(), emptySet(), 1000L)!!
+        // 重复的 u-1 必须只出现一次，否则 LazyColumn key 撞车抛 IllegalArgumentException
+        assertEquals(listOf("u-1", "u-2"), snapshot.members.map { it.userId })
+    }
+
+    @Test
     fun `merge keeps members with no profile data instead of dropping them`() {
         // 不提供任何 fill 响应，u-3 就没有资料，但必须仍然出现
         val snapshot = PkCampMerger.merge(rankingJson, emptyList(), emptySet(), 1000L)!!

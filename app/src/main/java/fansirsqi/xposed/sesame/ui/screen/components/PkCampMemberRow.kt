@@ -46,30 +46,30 @@ fun PkCampMemberRow(member: PkCampMember) {
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val label = member.displayLabel()
-            if (member.headPortrait.isBlank()) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primaryContainer),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = label.take(1),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = label.take(1),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                // 头像覆盖层不画背景：URL 加载失败时 AsyncImage 什么都不画，
+                // 底下这层首字母圆会透出来，降级为首字母而不是空白灰圈。
+                if (member.headPortrait.isNotBlank()) {
+                    AsyncImage(
+                        model = member.headPortrait.toHttpsUrl(),
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
                     )
                 }
-            } else {
-                AsyncImage(
-                    model = member.headPortrait.toHttpsUrl(),
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                )
             }
 
             Column(modifier = Modifier.weight(1f)) {

@@ -115,7 +115,9 @@ object PkCampMerger {
             updatedAt = now,
             selfUserId = selfUserId,
             rankMemberStatus = resData["rankMemberStatus"]?.asText().orEmpty(),
-            members = members.sortedBy { it.rank }
+            // 同一 userId 可能重复出现在 totalData，先去重再排序；重复 id 会让
+            // 页面 LazyColumn 的 key 撞车直接抛 IllegalArgumentException。
+            members = members.distinctBy { it.userId }.sortedBy { it.rank }
         )
     }
 }

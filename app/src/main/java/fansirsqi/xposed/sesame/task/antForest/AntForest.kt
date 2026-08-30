@@ -5645,7 +5645,10 @@ class AntForest : ModelTask(), EnergyCollectCallback {
             }
             val existing = PkCampStore.deserialize(Files.readFromFile(file))
             val merged = PkCampStore.reconcile(fresh, existing)
-            Files.write2File(PkCampStore.serialize(merged), file)
+            if (!Files.write2File(PkCampStore.serialize(merged), file)) {
+                Log.record(TAG, "❌ PK阵营好友：写入快照失败")
+                return
+            }
 
             val strangers = merged.members.count { !it.isFriend }
             Log.record(
