@@ -99,3 +99,8 @@ ai.py
 /serve-debug/user.py
 .roo
 tmp/
+# Claude Code
+.claude/
+
+# Gradle toolchain resolver (auto-generated)
+gradle/gradle-daemon-jvm.properties
