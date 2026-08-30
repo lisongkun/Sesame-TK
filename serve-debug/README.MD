@@ -43,3 +43,45 @@ http://127.0.0.1:8080/varlet_index.html
 欢迎更多大佬pr
 
 
+# `rpc_debug.py` RPC 调试面板
+
+用于在 PC 浏览器里调试手机端模块的 RPC 接口。请求流程：
+
+`浏览器 -> serve-debug/rpc_debug.py -> 手机 8080/debugHandler -> 支付宝进程内 RequestManager`
+
+## 启动手机端模块 HTTP 服务
+
+1. 安装 debug APK。
+2. 强停并重新打开支付宝，让 LSPosed 重新注入模块。
+3. 转发手机 8080 端口到 PC：
+
+```bash
+adb forward tcp:8080 tcp:8080
+```
+
+手机端 debug token：
+
+```text
+ET3vB^#td87sQqKaY*eMUJXP
+```
+
+## 启动 PC Web 面板
+
+在 `serve-debug` 目录运行：
+
+```bash
+uv run python rpc_debug.py
+```
+
+然后访问：
+
+```text
+http://127.0.0.1:9528
+```
+
+当前面板支持两种模式：
+
+- `Normal RPC`：对接手机端 `/debugHandler`，发送普通 `methodName + requestData` RPC。
+- `RpcEntity / XRiver`：对接手机端 `/debugRpcEntity`，发送带 `appName`、`facadeName`、`rpcMethodName`、`operationType` 的完整请求。
+
+AI摸鱼任务列表可选择模板 `AI摸鱼 listTask RpcEntity`。

@@ -2,6 +2,7 @@ package fansirsqi.xposed.sesame.hook
 
 import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XC_MethodReplacement
+import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import fansirsqi.xposed.sesame.data.General
 import fansirsqi.xposed.sesame.entity.UserEntity
@@ -9,17 +10,227 @@ import fansirsqi.xposed.sesame.util.AssetUtil
 import fansirsqi.xposed.sesame.util.Log
 import fansirsqi.xposed.sesame.util.maps.UserMap
 import org.json.JSONObject
+import java.lang.reflect.InvocationHandler
+import java.lang.reflect.Method
+import java.lang.reflect.Proxy
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 
 object HookUtil {
     private const val TAG = "HookUtil"
+    private const val MAX_DISCOVERED_PROXIES = 200
+    private const val NATIVE_RPC_HANDLER = "com.alipay.mobile.common.rpc.RpcInvocationHandler"
+
+    private val nativeRpcTargetInterfaces = setOf(
+        "com.alipay.mobilerelation.fpc.rpc.ContactPbRpc",
+        "com.alipay.mobilerelation.rpc.MobileRelationManagePBService",
+        "com.alipay.mobilerelation.rpc.ScocialInfoQueryRpc"
+    )
 
     val rpcHookMap = ConcurrentHashMap<Any, Array<Any?>>()
+
+    private val discoveredProxyHandlers = ConcurrentHashMap.newKeySet<String>()
+    private val proxyDiscoveryLogging = ThreadLocal.withInitial { false }
+
+    @Volatile
+    private var proxyDiscoveryInstalled = false
+
+    @Volatile
+    private var nativeRpcInvocationInstalled = false
+
+    private val nativeRpcCallSequence = AtomicLong(0)
+    private val nativeRpcCalls = ConcurrentHashMap<Any, NativeRpcCall>()
 
     private var lastToastTime = 0L
 
     private var microContextCache: Any? = null
+
+    private data class NativeRpcCall(
+        val id: Long,
+        val interfaceName: String,
+        val methodName: String
+    )
+
+    /**
+     * Discover concrete InvocationHandler implementations used by Alipay.
+     * This is diagnostic-only and never changes proxy creation or invocation results.
+     */
+    @Synchronized
+    fun hookProxyDiscovery() {
+        if (proxyDiscoveryInstalled) return
+
+        try {
+            val classArrayClass = java.lang.reflect.Array
+                .newInstance(Class::class.java, 0)
+                .javaClass
+
+            XposedHelpers.findAndHookMethod(
+                Proxy::class.java,
+                "newProxyInstance",
+                ClassLoader::class.java,
+                classArrayClass,
+                InvocationHandler::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (proxyDiscoveryLogging.get()) return
+
+                        val interfaces = param.args.getOrNull(1) as? Array<*> ?: return
+                        val handler = param.args.getOrNull(2) as? InvocationHandler ?: return
+                        if (handler.javaClass.classLoader == null) return
+
+                        val interfaceNames = interfaces
+                            .filterIsInstance<Class<*>>()
+                            .joinToString { it.name }
+                        val handlerName = handler.javaClass.name
+                        val discoveryKey = "$handlerName|$interfaceNames"
+
+                        if (discoveredProxyHandlers.size >= MAX_DISCOVERED_PROXIES ||
+                            !discoveredProxyHandlers.add(discoveryKey)
+                        ) {
+                            return
+                        }
+
+                        val callStack = Throwable().stackTrace
+                            .drop(2)
+                            .filterNot { it.className.startsWith("de.robv.android.xposed") }
+                            .take(8)
+                            .joinToString("\n") { "  at $it" }
+
+                        proxyDiscoveryLogging.set(true)
+                        try {
+                            Log.capture(
+                                """
+                                [ProxyDiscovery]
+                                Handler: $handlerName
+                                Interfaces: $interfaceNames
+                                Thread: ${Thread.currentThread().name}
+                                Stack:
+                                $callStack
+                                """.trimIndent()
+                            )
+                        } finally {
+                            proxyDiscoveryLogging.set(false)
+                        }
+                    }
+                }
+            )
+
+            proxyDiscoveryInstalled = true
+            Log.record(TAG, "Proxy.newProxyInstance 发现探针安装成功")
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "Proxy.newProxyInstance 发现探针安装失败", t)
+        }
+    }
+
+    /**
+     * Capture calls made through the native mPaaS RPC proxy for friend operations.
+     */
+    @Synchronized
+    fun hookNativeRpcInvocation(classLoader: ClassLoader) {
+        if (nativeRpcInvocationInstalled) return
+
+        try {
+            val handlerClass = XposedHelpers.findClassIfExists(NATIVE_RPC_HANDLER, classLoader)
+            if (handlerClass == null) {
+                Log.record(TAG, "原生 RPC Handler 不存在: $NATIVE_RPC_HANDLER")
+                return
+            }
+
+            val unhooks = XposedBridge.hookAllMethods(
+                handlerClass,
+                "invoke",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        try {
+                            val rpcMethod = param.args.getOrNull(1) as? Method ?: return
+                            val interfaceName = rpcMethod.declaringClass.name
+                            if (interfaceName !in nativeRpcTargetInterfaces) return
+
+                            val callId = nativeRpcCallSequence.incrementAndGet()
+                            nativeRpcCalls[param] = NativeRpcCall(callId, interfaceName, rpcMethod.name)
+
+                            val rpcArgs = param.args.getOrNull(2) as? Array<*>
+                            val annotations = rpcMethod.declaredAnnotations
+                                .joinToString { safeDescribeRpcValue(it) }
+
+                            Log.capture(
+                                """
+                                [NativeRpcRequest #$callId]
+                                Interface: $interfaceName
+                                Method: ${rpcMethod.name}
+                                Annotations: $annotations
+                                Args: ${safeDescribeRpcValue(rpcArgs)}
+                                Thread: ${Thread.currentThread().name}
+                                """.trimIndent()
+                            )
+                        } catch (t: Throwable) {
+                            Log.printStackTrace(TAG, "记录原生 RPC 请求失败", t)
+                        }
+                    }
+
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val call = nativeRpcCalls.remove(param) ?: return
+
+                        try {
+                            if (param.hasThrowable()) {
+                                val throwable = param.throwable
+                                Log.capture(
+                                    """
+                                    [NativeRpcError #${call.id}]
+                                    Interface: ${call.interfaceName}
+                                    Method: ${call.methodName}
+                                    Error: ${throwable.javaClass.name}: ${throwable.message}
+                                    """.trimIndent()
+                                )
+                            } else {
+                                Log.capture(
+                                    """
+                                    [NativeRpcResponse #${call.id}]
+                                    Interface: ${call.interfaceName}
+                                    Method: ${call.methodName}
+                                    Result: ${safeDescribeRpcValue(param.result)}
+                                    """.trimIndent()
+                                )
+                            }
+                        } catch (t: Throwable) {
+                            Log.printStackTrace(TAG, "记录原生 RPC 响应失败", t)
+                        }
+                    }
+                }
+            )
+
+            if (unhooks.isEmpty()) {
+                Log.record(TAG, "原生 RPC Handler 未找到 invoke 方法: $NATIVE_RPC_HANDLER")
+                return
+            }
+
+            nativeRpcInvocationInstalled = true
+            Log.record(TAG, "原生好友 RPC 调用探针安装成功")
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "原生好友 RPC 调用探针安装失败", t)
+        }
+    }
+
+    private fun safeDescribeRpcValue(value: Any?): String = try {
+        when (value) {
+            null -> "null"
+            is Array<*> -> value.joinToString(prefix = "[", postfix = "]") {
+                safeDescribeRpcValue(it)
+            }
+            is ByteArray -> value.contentToString()
+            is ShortArray -> value.contentToString()
+            is IntArray -> value.contentToString()
+            is LongArray -> value.contentToString()
+            is FloatArray -> value.contentToString()
+            is DoubleArray -> value.contentToString()
+            is CharArray -> value.concatToString()
+            is BooleanArray -> value.contentToString()
+            else -> value.toString()
+        }
+    } catch (t: Throwable) {
+        "<${value?.javaClass?.name ?: "unknown"} toString failed: ${t.javaClass.simpleName}>"
+    }
 
     /**
      * Hook RpcBridgeExtension.rpc 方法，记录请求信息

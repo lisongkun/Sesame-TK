@@ -54,6 +54,10 @@ class AntSports : ModelTask() {
 
         /** @brief 训练好友 0 金币达上限日期缓存键 */
         private const val TRAIN_FRIEND_ZERO_COIN_DATE = "TRAIN_FRIEND_ZERO_COIN_DATE"
+
+        /** @brief 通过 hook 捕获的 RpcManager 实例 */
+        @Volatile
+        var rpcManagerInstance: Any? = null
     }
 
     /** @brief 临时步数缓存（-1 表示未初始化） */
@@ -262,6 +266,24 @@ class AntSports : ModelTask() {
         } catch (t: Throwable) {
             Log.printStackTrace(TAG, "hook readDailyStep err:", t)
         }
+
+        // Hook RpcManager 构造函数以捕获实例，供手动步数同步使用
+        try {
+            XposedHelpers.findAndHookConstructor(
+                "com.alibaba.health.pedometer.intergation.rpc.RpcManager",
+                classLoader,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        rpcManagerInstance = param.thisObject
+                        Log.record(TAG, "捕获 RpcManager 实例: ${param.thisObject}")
+                    }
+                }
+            )
+            Log.record(TAG, "hook RpcManager constructor successfully")
+        } catch (t: Throwable) {
+            Log.record(TAG, "hook RpcManager constructor: ${t.message}")
+            // 构造函数 hook 失败不影响主流程
+        }
     }
 
     /**
@@ -364,24 +386,21 @@ class AntSports : ModelTask() {
                 Runnable {
                     val step = tmpStepCount()
                     try {
-                        val loader = ApplicationHook.classLoader
-                        if (loader == null) {
-                            Log.error(TAG, "ClassLoader is null, 跳过同步步数")
+                        val instance = rpcManagerInstance
+                        if (instance == null) {
+                            Log.error(TAG, "RpcManager 实例未捕获，跳过同步步数")
                             return@Runnable
                         }
 
-                        val rpcManager = XposedHelpers.callStaticMethod(
-                            loader.loadClass("com.alibaba.health.pedometer.intergation.rpc.RpcManager"),
-                            "a"
-                        )
-
-                        val success = XposedHelpers.callMethod(
-                            rpcManager,
+                        val rpcManagerClass = instance.javaClass
+                        val syncMethod = rpcManagerClass.getDeclaredMethod(
                             "a",
-                            step,
-                            java.lang.Boolean.FALSE,
-                            "system"
-                        ) as Boolean
+                            Int::class.javaPrimitiveType,
+                            Boolean::class.javaPrimitiveType,
+                            String::class.java
+                        )
+                        syncMethod.isAccessible = true
+                        val success = syncMethod.invoke(instance, step, false, "system") as Boolean
 
                         if (success) {
                             Log.other("同步步数🏃🏻‍♂️[$step 步]")
@@ -414,6 +433,67 @@ class AntSports : ModelTask() {
             }
         }
         return tmpStepCount
+    }
+
+    /**
+     * 手动触发步数同步（供 ManualTask 调用）
+     *
+     * 通过 boot() 中 hook RpcManager 构造函数捕获的实例来调用同步方法。
+     * RpcManager 没有静态方法，无法通过 callStaticMethod 获取实例。
+     */
+    fun manualSyncStep() {
+        Log.record(TAG, "manualSyncStep 开始执行")
+        val step = tmpStepCount()
+        Log.record(TAG, "manualSyncStep 计算步数: $step")
+
+        val instance = rpcManagerInstance
+        if (instance == null) {
+            Log.error(TAG, "manualSyncStep RpcManager 实例未捕获，请重启支付宝后再试")
+            // 回退方案：直接调用 PedometerAgent.readDailyStep 触发 hook
+            try {
+                val loader = ApplicationHook.classLoader
+                if (loader != null) {
+                    val pedometerAgentClass = loader.loadClass("com.alibaba.health.pedometer.core.datasource.PedometerAgent")
+                    val readDailyStepMethod = pedometerAgentClass.getDeclaredMethod("readDailyStep")
+                    readDailyStepMethod.isAccessible = true
+                    val hookResult = readDailyStepMethod.invoke(null)
+                    Log.record(TAG, "manualSyncStep 回退方案: readDailyStep 返回 $hookResult")
+                    Log.other("手动同步步数🏃🏻‍♂️[$step 步](通过readDailyStep)")
+                    Status.setFlagToday(StatusFlags.FLAG_ANTSPORTS_SYNC_STEP_DONE)
+                }
+            } catch (t: Throwable) {
+                Log.error(TAG, "manualSyncStep 回退方案失败: ${t.message}")
+            }
+            Log.record(TAG, "manualSyncStep 执行结束")
+            return
+        }
+
+        try {
+            val rpcManagerClass = instance.javaClass
+            Log.record(TAG, "manualSyncStep 使用捕获的 RpcManager 实例: $instance")
+
+            // 调用实例方法 a(int, boolean, String) 进行步数同步
+            val syncMethod = rpcManagerClass.getDeclaredMethod(
+                "a",
+                Int::class.javaPrimitiveType,
+                Boolean::class.javaPrimitiveType,
+                String::class.java
+            )
+            syncMethod.isAccessible = true
+            val success = syncMethod.invoke(instance, step, false, "system") as Boolean
+            Log.record(TAG, "manualSyncStep RPC 调用结果: $success")
+
+            if (success) {
+                Log.other("手动同步步数🏃🏻‍♂️[$step 步]")
+                Status.setFlagToday(StatusFlags.FLAG_ANTSPORTS_SYNC_STEP_DONE)
+                Log.record(TAG, "manualSyncStep 同步成功，已设置标记")
+            } else {
+                Log.error(TAG, "手动同步运动步数失败:$step")
+            }
+        } catch (t: Throwable) {
+            Log.error(TAG, "manualSyncStep 异常: ${t.javaClass.simpleName}: ${t.message}")
+        }
+        Log.record(TAG, "manualSyncStep 执行结束")
     }
 
     // ---------------------------------------------------------------------

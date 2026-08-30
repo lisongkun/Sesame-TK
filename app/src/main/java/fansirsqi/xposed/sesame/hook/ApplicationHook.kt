@@ -740,6 +740,11 @@ class ApplicationHook {
                 Config.load(userId)
                 if (!Config.isLoaded()) return false
 
+                if (debugMode.value) {
+                    HookUtil.hookProxyDiscovery()
+                    HookUtil.hookNativeRpcInvocation(classLoader!!)
+                }
+
                 Notify.start(service!!)
                 setWakenAtTimeAlarm()
 
