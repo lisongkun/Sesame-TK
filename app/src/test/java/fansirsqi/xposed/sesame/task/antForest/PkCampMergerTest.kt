@@ -15,9 +15,9 @@ class PkCampMergerTest {
           "rankMemberStatus":"JOIN",
           "myself":{"userId":"s-self"},
           "totalData":[
-            {"userId":"u-1","rank":1,"energySummation":41280},
+            {"userId":"u-3","rank":3,"energySummation":13938},
             {"userId":"s-self","rank":2,"energySummation":31817},
-            {"userId":"u-3","rank":3,"energySummation":13938}
+            {"userId":"u-1","rank":1,"energySummation":41280}
           ],
           "friendRanking":[
             {"userId":"u-1","displayName":"淡泊","headPortrait":"http://cdn/a",
