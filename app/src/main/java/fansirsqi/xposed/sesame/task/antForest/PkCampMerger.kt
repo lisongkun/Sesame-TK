@@ -28,7 +28,10 @@ object PkCampMerger {
     )
 
     private fun readResData(json: String): JsonNode? = try {
-        mapper.readTree(json)?.get("resData")
+        val root = mapper.readTree(json)
+        // 实测支付宝返回的是平铺结构（success/totalData/friendRanking 直接在顶层），
+        // 部分历史抓包样本是 resData 包裹的 —— 两种都兼容。
+        root?.get("resData") ?: root
     } catch (_: Exception) {
         null
     }

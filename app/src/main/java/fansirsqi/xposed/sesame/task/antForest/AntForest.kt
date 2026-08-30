@@ -39,6 +39,7 @@ import fansirsqi.xposed.sesame.task.antForest.Privilege.studentSignInRedEnvelope
 import fansirsqi.xposed.sesame.task.antForest.Privilege.youthPrivilege
 import fansirsqi.xposed.sesame.ui.ObjReference
 import fansirsqi.xposed.sesame.util.Average
+import fansirsqi.xposed.sesame.util.Files
 import fansirsqi.xposed.sesame.util.GlobalThreadPools
 import fansirsqi.xposed.sesame.util.ListUtil
 import fansirsqi.xposed.sesame.util.Log
@@ -5590,5 +5591,70 @@ class AntForest : ModelTask(), EnergyCollectCallback {
      */
     fun manualForestVitalityRewardTask() {
         doForestVitalityRewardTask()
+    }
+
+    /**
+     * 手动拉取 PK 阵营成员并落盘为 pkCamp.json，供模块 UI 展示。
+     *
+     * 本方法只做 I/O：发 RPC、注入好友集合与时间戳、落盘。
+     * 所有解析与合并逻辑都在 PkCampMerger（纯函数，有单元测试覆盖）。
+     */
+    fun manualFetchPkCampFriends() {
+        try {
+            val userId = UserMap.currentUid
+            if (userId.isNullOrEmpty()) {
+                Log.record(TAG, "❌ PK阵营好友：当前用户未知，跳过")
+                return
+            }
+
+            val rankingJson = AntForestRpcCall.queryTopEnergyChallengeRanking()
+            if (rankingJson.isEmpty()) {
+                Log.record(TAG, "❌ PK阵营好友：拉取排行榜失败，保留旧快照")
+                return
+            }
+
+            // 补全 friendRanking 里缺失的成员资料，每批 BATCH_SIZE 个
+            val fillJsons = ArrayList<String>()
+            val missing = PkCampMerger.missingUserIds(rankingJson)
+            missing.chunked(PkCampMerger.BATCH_SIZE).forEach { batch ->
+                val arr = JSONArray()
+                batch.forEach { arr.put(it) }
+                val filled = AntForestRpcCall.fillUserRobFlag(arr, true)
+                if (filled.isEmpty()) {
+                    Log.record(TAG, "⚠️ PK阵营好友：补全 ${batch.size} 人失败，这批资料将留空")
+                } else {
+                    fillJsons.add(filled)
+                }
+            }
+
+            val fresh = PkCampMerger.merge(
+                rankingJson = rankingJson,
+                fillJsons = fillJsons,
+                friendIds = UserMap.getUserIdSet(),
+                now = System.currentTimeMillis()
+            )
+            if (fresh == null) {
+                Log.record(TAG, "❌ PK阵营好友：响应解析失败，保留旧快照")
+                return
+            }
+
+            val file = Files.getTargetFileofUser(userId, "pkCamp.json")
+            if (file == null) {
+                Log.record(TAG, "❌ PK阵营好友：无法定位落盘文件")
+                return
+            }
+            val existing = PkCampStore.deserialize(Files.readFromFile(file))
+            val merged = PkCampStore.reconcile(fresh, existing)
+            Files.write2File(PkCampStore.serialize(merged), file)
+
+            val strangers = merged.members.count { !it.isFriend }
+            Log.record(
+                TAG,
+                "✅ PK阵营好友：共 ${merged.members.size} 人，其中陌生人 $strangers 人" +
+                    "（状态 ${merged.rankMemberStatus}）"
+            )
+        } catch (t: Throwable) {
+            Log.printStackTrace(TAG, "manualFetchPkCampFriends 失败", t)
+        }
     }
 }

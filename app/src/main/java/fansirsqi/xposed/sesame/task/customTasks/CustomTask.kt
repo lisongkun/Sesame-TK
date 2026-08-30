@@ -14,5 +14,6 @@ enum class CustomTask(val displayName: String) {
     FARM_USE_TOOL("使用庄园道具"),
     TRIGGER_CAPTCHA("触发验证码"),
     OCEAN_AI_FISH("AI摸鱼"),
-    SPORTS_SYNC_STEP("同步运动步数")
+    SPORTS_SYNC_STEP("同步运动步数"),
+    FOREST_PK_CAMP("拉取PK阵营好友")
 }
