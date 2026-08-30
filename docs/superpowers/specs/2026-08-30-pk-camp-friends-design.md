@@ -412,3 +412,49 @@ adb shell su -c 'cat /sdcard/Android/media/com.eg.android.AlipayGphone/sesame-TK
 - **已知**：`userId` 是加好友请求的必要入参，本期落盘已保存；执行必须在支付宝进程（C2），因此会复用本期建立的「广播触发 + 落盘」链路；`isFriend` 已经算好，可直接用来过滤掉已是好友的人。
 - **未知**：加好友的 RPC 接口本身。需要在支付宝里手动加一次陌生人、用 `capture` 日志或 `serve-debug/rpc_debug.py` 抓出 `operationType` 与 `requestData` 结构。
 - **需要考虑**：批量加好友大概率有频率限制与风控，一键添加应当串行 + 间隔 + 失败可续，而不是并发轰炸。这会是下一个 spec 的主要内容。
+
+## 13. 交付后遗留事项（2026-08-30 实现完成时记录）
+
+按优先级排列。前两项由终审 review 提出，经权衡判定超出本轮范围、需产品决策。
+
+### 13.1 跨赛季覆盖会丢掉正是本功能想留住的人（最高优先级）
+
+`PkCampStore.reconcile` 只保证「不会覆盖成空」。赛季 N+1 的非空名单会**整体替换**赛季 N
+的名单。而「一键添加好友」要更晚才上线 —— 第一批陌生人很可能在用户有能力添加他们之前
+就已被新赛季名单冲掉，这恰好落空了本功能存在的理由。
+
+可选解法：按 `userId` 求并集，给 `PkCampMember` 增加 `lastSeenAt`，UI 上区分「本赛季」
+与「往期」成员。这会改变 `pkCamp.json` 格式，且需决定往期成员如何展示、是否设上限，
+故留给产品决策，本轮未实现。
+
+### 13.2 `Files.write2File` 非原子写
+
+先截断再写。若进程在写入瞬间被杀，名单会被毁掉，UI 随后显示成「还没有数据」。
+`DataStore.saveToDisk` 已用 tmp + rename 可参照。但 `write2File` 是全项目共用函数，
+改它超出本分支范围。
+
+### 13.3 真机 UI 验证尚未完成
+
+已通过：26 项单元测试、`assembleDebug`、以及真机**数据链路**验证（广播 → 支付宝进程
+重写 `pkCamp.json`，29 人 / 1 好友 / 28 陌生人 / 3 条空头像）。
+
+但**渲染层未经任何人眼确认**（验证时设备处于图案锁屏，随后断开连接）。风险最高的三处：
+头像加载（若 https 不可服务则 `AsyncImage` 失败、露出底层首字圆圈 —— 已按终审建议做了
+兜底但未实测）；`joined=false` 横幅 + 「更新于」+ chip 行 + `fillMaxSize` 的 LazyColumn
+在普通 `Column` 里的叠放（静态分析正确，因 Column 最后测量无权重子项）；刷新转圈 →
+超时 Snackbar 的路径。合并进 release 前应先真机打开一次。
+
+### 13.4 `.gitignore:82` 的裸 `test` 规则
+
+该规则匹配任意名为 `test` 的目录，`app/src/test/` 因此整体被忽略 —— 本分支的测试文件
+是靠 `git add -f` 才入库的，而在此之前仓库里一个测试文件都没有（既有的
+`LogChunkerTest.kt` 从未提交）。下一位贡献者写的测试会静默消失。建议改成 `/test/`
+之类更精确的写法。属仓库级问题，与本功能无关。
+
+### 13.5 合并时须处理
+
+分支上的 `a90462ce`（`fix(sports): 补充 manualSyncStep`）是为让分支能编译而加的最小
+兜底 —— 已提交的 `main` 因 `ManualTask.kt` 调用了不存在的 `AntSports.manualSyncStep()`
+而无法编译。用户工作区里有独立且更完整的实现（驱动捕获到的 `rpcManagerInstance`），
+分支上的兜底只是转调 `syncStepTask()`，语义不同。**合并时应丢弃 `a90462ce`，采用用户
+自己的版本。**
