@@ -78,4 +78,15 @@ class PkCampStoreTest {
         val result = PkCampStore.reconcile(emptyFresh, joined)
         assertEquals(2, result.members.size)
     }
+
+    @Test
+    fun `reconcile accepts a smaller non empty fresh list because seasons turn over`() {
+        // 收缩到更小的非空列表是刻意为之，不是缺陷：PK 赛季会轮换，新赛季的名单
+        // 可以合法地比旧快照更少（如 30 → 10）。若按 fresh.size >= existing.size
+        // 拦截，新赛季名单将永远无法替换旧名单，页面会一直显示早已退场的陌生人。
+        // 规格的「只增不毁」精确含义是「绝不覆盖成空」——非空的新数据就是真相，必须取胜。
+        val smallerFresh = joined.copy(members = listOf(member("u-1", 1)), updatedAt = 400L)
+        val result = PkCampStore.reconcile(smallerFresh, joined)
+        assertEquals(listOf("u-1"), result.members.map { it.userId })
+    }
 }
